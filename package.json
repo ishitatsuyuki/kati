@@ -1,0 +1,28 @@
+{
+  "name": "tskati",
+  "version": "1.0.0",
+  "description": "A TypeScript port of Kati (GNU make clone)",
+  "main": "dist/index.js",
+  "bin": {
+    "tskati": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "start": "node dist/index.js",
+    "dev": "npm run build && npm run start",
+    "clean": "rm -rf dist",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["make", "build", "ninja", "cli"],
+  "author": "",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.14.0",
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.3",
+    "typescript": "^5.9.2"
+  }
+}

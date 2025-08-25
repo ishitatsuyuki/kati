@@ -22,3 +22,10 @@ version.cc
 # Added by cargo
 
 /target
+
+# NPM
+/node_modules
+
+# TypeScript
+/dist
+*.tsbuildinfo
