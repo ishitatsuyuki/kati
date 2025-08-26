@@ -1,4 +1,5 @@
-import { Stmt, Loc, AssignDirective, CommandStmt, ParseErrorStmt } from './core/ast';
+import { Stmt, Loc, AssignDirective, CommandStmt, ParseErrorStmt, RuleStmt, AssignStmt, RuleSep, AssignOp } from './core/ast';
+import { StrUtil } from './utils/strutil';
 
 type DirectiveHandler = (line: string, directive: string) => void;
 
@@ -97,11 +98,8 @@ export class Parser {
     }
 
     private findEndOfLine(): number {
-        let pos = this.l;
-        while (pos < this.buf.length && this.buf[pos] !== '\n') {
-            pos++;
-        }
-        return pos;
+        const newlinePos = this.buf.indexOf('\n', this.l);
+        return newlinePos === -1 ? this.buf.length : newlinePos;
     }
 
     private trimLeftSpace(line: string): string {
@@ -148,7 +146,7 @@ export class Parser {
     }
 
     private getDirective(line: string): string {
-        const prefix = line.substring(0, Math.min(line.length, Parser.longestDirectiveLen + 1));
+        const prefix = line.substring(0, Parser.longestDirectiveLen + 1);
         const spaceIndex = prefix.search(/[ \t#]/);
         return spaceIndex === -1 ? prefix : prefix.substring(0, spaceIndex);
     }
@@ -166,9 +164,146 @@ export class Parser {
     }
 
     private parseRuleOrAssign(line: string): void {
-        // TODO: Implement rule and assignment parsing
-        // This is where we'll determine if a line is a rule or assignment
-        // and create the appropriate AST node
+        const sep = StrUtil.findThreeOutsideParen(line, ':', '=', ';');
+        
+        if (sep === -1 || line[sep] === ';') {
+            this.parseRule(line, -1);
+        } else if (line[sep] === '=') {
+            this.parseAssign(line, sep);
+        } else if (sep + 1 < line.length && line[sep + 1] === '=') {
+            this.parseAssign(line, sep + 1);
+        } else if (line[sep] === ':') {
+            this.parseRule(line, sep);
+        } else {
+            throw new Error('Invalid parsing state');
+        }
+    }
+
+    private parseExpr(_loc: Loc, s: string): any {
+        // Placeholder implementation - will be replaced with proper expression parsing
+        return s;
+    }
+
+    private parseRule(line: string, sep: number): void {
+        if (this.currentDirective !== AssignDirective.NONE) {
+            if (this.isInExport()) {
+                return;
+            }
+            if (sep !== -1) {
+                sep += this.origLineWithDirectives.length - line.length;
+            }
+            line = this.origLineWithDirectives;
+        }
+
+        line = StrUtil.trimLeftSpace(line);
+        if (line.length === 0) {
+            return;
+        }
+
+        if (this.origLineWithDirectives[0] === '\t') {
+            this.error("*** commands commence before first target.");
+            return;
+        }
+
+        const ruleStmt = new RuleStmt(this.loc, '', RuleSep.NULL, null);
+        
+        if (sep === -1) {
+            // No separator found - just a target
+            ruleStmt.lhs = this.parseExpr(this.loc, line);
+            ruleStmt.sep = RuleSep.NULL;
+            ruleStmt.rhs = null;
+        } else {
+            // Find additional separators in the part after the colon
+            const found = StrUtil.findTwoOutsideParen(line.substring(sep + 1), '=', ';');
+            
+            if (found !== -1) {
+                const foundPos = found + sep + 1;
+                ruleStmt.lhs = this.parseExpr(this.loc, StrUtil.trimSpace(line.substring(0, foundPos)));
+                
+                if (line[foundPos] === ';') {
+                    ruleStmt.sep = RuleSep.SEMICOLON;
+                } else if (line[foundPos] === '=') {
+                    if (line.length > (foundPos + 2) && 
+                        line[foundPos + 1] === '$' && 
+                        line[foundPos + 2] === '=') {
+                        ruleStmt.sep = RuleSep.FINALEQ;
+                        ruleStmt.rhs = this.parseExpr(this.loc, StrUtil.trimLeftSpace(line.substring(foundPos + 3)));
+                    } else {
+                        ruleStmt.sep = RuleSep.EQ;
+                        ruleStmt.rhs = this.parseExpr(this.loc, StrUtil.trimLeftSpace(line.substring(foundPos + 1)));
+                    }
+                }
+            } else {
+                ruleStmt.lhs = this.parseExpr(this.loc, line);
+                ruleStmt.sep = RuleSep.NULL;
+                ruleStmt.rhs = null;
+            }
+        }
+        
+        this.outStmts.push(ruleStmt);
+        this.afterRule = true;
+    }
+
+    private parseAssignStatement(line: string, sep: number): { lhs: string, rhs: string, op: AssignOp } {
+        if (sep === 0) {
+            throw new Error("*** empty variable name ***");
+        }
+        
+        let op = AssignOp.EQ;
+        let lhsEnd = sep;
+        
+        switch (line[sep - 1]) {
+            case ':':
+                lhsEnd--;
+                op = AssignOp.COLON_EQ;
+                break;
+            case '+':
+                lhsEnd--;
+                op = AssignOp.PLUS_EQ;
+                break;
+            case '?':
+                lhsEnd--;
+                op = AssignOp.QUESTION_EQ;
+                break;
+        }
+        
+        const lhs = StrUtil.trimSpace(line.substring(0, lhsEnd));
+        const rhs = StrUtil.trimLeftSpace(line.substring(Math.min(sep + 1, line.length)));
+        
+        return { lhs, rhs, op };
+    }
+
+    private parseAssign(line: string, separatorPos: number): void {
+        if (separatorPos === 0) {
+            this.error("*** empty variable name ***");
+            return;
+        }
+
+        const { lhs, rhs: rawRhs, op } = this.parseAssignStatement(line, separatorPos);
+
+        // Check for final assignment ($=)
+        let rhs = rawRhs;
+        const isFinal = (rhs.length >= 2 && rhs[0] === '$' && rhs[1] === '=');
+        if (isFinal) {
+            rhs = StrUtil.trimLeftSpace(rhs.substring(2));
+        }
+
+        const stmt = new AssignStmt(
+            this.loc,
+            this.parseExpr(this.loc, lhs),
+            this.parseExpr(this.loc, rhs),
+            rhs,
+            op,
+            this.currentDirective,
+            isFinal
+        );
+        
+        this.outStmts.push(stmt);
+        this.afterRule = false;
+    }
+
+    private isInExport(): boolean {
+        return (this.currentDirective & AssignDirective.EXPORT) !== 0;
     }
 
     private error(msg: string): void {
