@@ -1,4 +1,4 @@
-import { Stmt, Loc, AssignDirective, CommandStmt, ParseErrorStmt, RuleStmt, AssignStmt, RuleSep, AssignOp } from './core/ast';
+import { Stmt, Loc, AssignDirective, CommandStmt, ParseErrorStmt, RuleStmt, AssignStmt, RuleSep, AssignOp, ParseExprOpt, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func } from './core/ast';
 import { StrUtil } from './utils/strutil';
 
 type DirectiveHandler = (line: string, directive: string) => void;
@@ -121,7 +121,7 @@ export class Parser {
         if (line[0] === '\t' && this.afterRule) {
             const stmt = new CommandStmt(
                 this.loc,
-                line, // Will need proper expression parsing later
+                this.parseExpr(this.loc, line.substring(1), ParseExprOpt.COMMAND),
                 line
             );
             this.outStmts.push(stmt);
@@ -179,9 +179,273 @@ export class Parser {
         }
     }
 
-    private parseExpr(_loc: Loc, s: string): any {
-        // Placeholder implementation - will be replaced with proper expression parsing
-        return s;
+    private parseExpr(loc: Loc, s: string, opt: ParseExprOpt = ParseExprOpt.NORMAL): Expr {
+        return this.parseExprImpl(loc, s, null, opt).expr;
+    }
+
+    private parseExprImpl(loc: Loc, s: string, terms: string[] | null, opt: ParseExprOpt = ParseExprOpt.NORMAL, trimRightSpace: boolean = false): { expr: Expr; index: number } {
+        const listLoc = { ...loc };
+        
+        // Remove carriage return if present
+        if (s.endsWith('\r')) {
+            s = s.slice(0, -1);
+        }
+
+        let b = 0;
+        let saveParenChar = '';
+        let parenDepth = 0;
+        let i = 0;
+        const list: Value[] = [];
+
+        for (i = 0; i < s.length; i++) {
+            const itemLoc = { ...loc };
+            const c = s[i];
+
+            // Check for termination characters
+            if (terms && terms.includes(c) && !saveParenChar) {
+                break;
+            }
+
+            // Handle comments
+            if (!terms && c === '#' && this.shouldHandleComments(opt)) {
+                if (i > b) {
+                    list.push(new Literal(itemLoc, s.substring(b, i)));
+                }
+                let wasBackslash = false;
+                for (; i < s.length && !(s[i] === '\n' && !wasBackslash); i++) {
+                    wasBackslash = !wasBackslash && s[i] === '\\';
+                }
+                return { expr: this.newExpr(itemLoc, list), index: i };
+            }
+
+            // Handle dollar variables and functions
+            if (c === '$') {
+                if (i + 1 >= s.length) {
+                    break;
+                }
+                if (i > b) {
+                    list.push(new Literal(itemLoc, s.substring(b, i)));
+                }
+                if (s[i + 1] === '$') {
+                    // Escaped dollar
+                    list.push(new Literal(itemLoc, '$'));
+                    i += 1;
+                    b = i + 1;
+                    continue;
+                }
+                if (terms && terms.includes(s[i + 1])) {
+                    list.push(new Literal(itemLoc, '$'));
+                    return { expr: this.newExpr(itemLoc, list), index: i + 1 };
+                }
+                const dollarResult = this.parseDollar(loc, s.substring(i));
+                list.push(dollarResult.expr);
+                i += dollarResult.index;
+                b = i;
+                i--;
+                continue;
+            }
+
+            // Handle parentheses in function context
+            if ((c === '(' || c === '{') && opt === ParseExprOpt.FUNC) {
+                const cp = this.closeParen(c);
+                if (terms && terms.length > 0 && terms[0] === cp) {
+                    parenDepth++;
+                    saveParenChar = cp;
+                    terms = terms.slice(1);
+                } else if (cp === saveParenChar) {
+                    parenDepth++;
+                }
+                continue;
+            }
+
+            if (c === saveParenChar) {
+                parenDepth--;
+                if (parenDepth === 0) {
+                    terms = [saveParenChar, ...(terms || [])];
+                    saveParenChar = '';
+                }
+            }
+
+            // Handle backslashes (but not in command context)
+            if (c === '\\' && i + 1 < s.length && opt !== ParseExprOpt.COMMAND) {
+                const n = s[i + 1];
+                if (n === '\\') {
+                    i++;
+                    continue;
+                }
+                if (n === '#' && this.shouldHandleComments(opt)) {
+                    list.push(new Literal(itemLoc, s.substring(b, i)));
+                    i++;
+                    b = i;
+                    continue;
+                }
+                if (n === '\r' || n === '\n') {
+                    loc.lineno++;
+                    if (terms && terms.includes(' ')) {
+                        break;
+                    }
+                    if (n === '\r' && i + 2 < s.length && s[i + 2] === '\n') {
+                        i++;
+                    }
+                    i++;
+                    b = i + 1;
+                    continue;
+                }
+            }
+        }
+
+        // Add any remaining literal text
+        if (i > b) {
+            let rest = s.substring(b, i);
+            if (trimRightSpace) {
+                rest = StrUtil.trimRightSpace(rest);
+            }
+            if (rest.length > 0) {
+                list.push(new Literal(listLoc, rest));
+            }
+        }
+
+        return { expr: this.newExpr(listLoc, list), index: i };
+    }
+
+    private parseDollar(loc: Loc, s: string): { expr: Expr; index: number } {
+        if (s.length < 2 || s[0] !== '$' || s[1] === '$') {
+            throw new Error('Invalid dollar expression');
+        }
+
+        const startLoc = { ...loc };
+        const cp = this.closeParen(s[1]);
+        
+        if (!cp) {
+            // Simple variable like $a
+            return { expr: new SymRef(startLoc, s.substring(1, 2)), index: 2 };
+        }
+
+        // Complex variable like ${var} or $(func)
+        const terms = [cp, ':', ' '];
+        let i = 2;
+
+        while (true) {
+            const vnameResult = this.parseExprImpl(loc, s.substring(i), terms, ParseExprOpt.NORMAL);
+            const vname = vnameResult.expr;
+            i += vnameResult.index;
+
+            if (s[i] === cp) {
+                // Simple variable reference ${var}
+                if (vname instanceof Literal) {
+                    const sym = vname.getLiteralValueUnsafe();
+                    return { expr: new SymRef(startLoc, sym), index: i + 1 };
+                }
+                return { expr: new VarRef(startLoc, vname), index: i + 1 };
+            }
+
+            if (s[i] === ' ' || s[i] === '\\') {
+                // Function call ${func args}
+                if (vname instanceof Literal) {
+                    const funcName = vname.getLiteralValueUnsafe();
+                    // TODO: Check if this is a valid function name
+                    const func = new Func(startLoc, funcName);
+                    const funcResult = this.parseFunc(loc, func, s, i + 1, [cp]);
+                    return { expr: func, index: funcResult };
+                }
+                // Not a function - continue parsing as variable
+                i = 2;
+                terms.splice(2, 1); // Remove ' ' from terms
+                continue;
+            }
+
+            if (s[i] === ':') {
+                // Variable substitution ${var:pattern=subst}
+                terms.splice(2, 1); // Remove ' ' from terms
+                terms[1] = '=';
+                
+                const patResult = this.parseExprImpl(loc, s.substring(i + 1), terms, ParseExprOpt.NORMAL);
+                const pat = patResult.expr;
+                i += 1 + patResult.index;
+
+                if (s[i] === cp) {
+                    // Just pattern without substitution ${var:pattern}
+                    const colonLit = new Literal(startLoc, ':');
+                    const combined = this.newExpr(startLoc, [vname, colonLit, pat]);
+                    return { expr: new VarRef(startLoc, combined), index: i + 1 };
+                }
+
+                terms[1] = cp;
+                const substResult = this.parseExprImpl(loc, s.substring(i + 1), terms, ParseExprOpt.NORMAL);
+                const subst = substResult.expr;
+                i += 1 + substResult.index;
+                
+                return { expr: new VarSubst(startLoc, vname, pat, subst), index: i + 1 };
+            }
+
+            // Handle unmatched parentheses case
+            const found = s.indexOf(cp, i);
+            if (found !== -1) {
+                // Unmatched parentheses warning would go here
+                return { expr: new SymRef(startLoc, s.substring(2, found)), index: s.length };
+            }
+
+            throw new Error('Unterminated variable reference');
+        }
+    }
+
+    private parseFunc(loc: Loc, func: Func, s: string, startIndex: number, terms: string[]): number {
+        let i = startIndex;
+        let nargs = 1; // Functions have at least 1 argument (the function name itself is not counted)
+        
+        const funcTerms = [terms[0], ','];
+        
+        while (i < s.length) {
+            if (s[i] === ' ' || s[i] === '\t') {
+                i++;
+                continue;
+            }
+
+            const argResult = this.parseExprImpl(loc, s.substring(i), funcTerms, ParseExprOpt.FUNC, true);
+            func.addArg(argResult.expr);
+            i += argResult.index;
+
+            if (i === s.length) {
+                throw new Error(`Unterminated call to function: missing '${terms[0]}'`);
+            }
+
+            nargs++;
+            if (s[i] === terms[0]) {
+                i++;
+                break;
+            }
+            i++; // Should be ','
+            if (i === s.length) {
+                break;
+            }
+        }
+
+        return i;
+    }
+
+    private shouldHandleComments(opt: ParseExprOpt): boolean {
+        return opt !== ParseExprOpt.DEFINE && opt !== ParseExprOpt.COMMAND;
+    }
+
+    private closeParen(c: string): string {
+        switch (c) {
+            case '(':
+                return ')';
+            case '{':
+                return '}';
+            default:
+                return '';
+        }
+    }
+
+    private newExpr(loc: Loc, values: Value[]): Expr {
+        if (values.length === 0) {
+            return new Literal(loc, '');
+        } else if (values.length === 1) {
+            return values[0];
+        } else {
+            return new ValueList(loc, values);
+        }
     }
 
     private parseRule(line: string, sep: number): void {
@@ -205,7 +469,7 @@ export class Parser {
             return;
         }
 
-        const ruleStmt = new RuleStmt(this.loc, '', RuleSep.NULL, null);
+        const ruleStmt = new RuleStmt(this.loc, new Literal(this.loc, ''), RuleSep.NULL, null);
         
         if (sep === -1) {
             // No separator found - just a target

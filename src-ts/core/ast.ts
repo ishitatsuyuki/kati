@@ -23,6 +23,13 @@ enum CondOp {
     IFNDEF = 'IFNDEF'
 }
 
+enum ParseExprOpt {
+    NORMAL = 0,
+    DEFINE = 1,
+    COMMAND = 2,
+    FUNC = 3
+}
+
 enum RuleSep {
     NULL = 'NULL',
     SEMICOLON = 'SEMICOLON',
@@ -74,7 +81,7 @@ class Literal extends Value {
     }
     
     debugString(): string {
-        return this.s;
+        return `"${this.s}"`;
     }
 }
 
@@ -193,7 +200,7 @@ class VarSubst extends Value {
 class Func extends Value {
     private args: Value[] = [];
     
-    constructor(loc: Loc, private name: string, private arity: number = 0, private minArity: number = 0) {
+    constructor(loc: Loc, private name: string, private _arity: number = 0, private _minArity: number = 0) {
         super(loc);
     }
     
@@ -230,6 +237,7 @@ interface Stmt {
     loc: Loc;
     orig?: string | undefined;
     eval(ctx: Context): void;
+    debugString(): string;
 }
 
 class RuleStmt implements Stmt {
@@ -243,6 +251,11 @@ class RuleStmt implements Stmt {
 
     eval(ctx: Context): void {
         // Implementation will be added later
+    }
+    
+    debugString(): string {
+        const rhsStr = this.rhs ? ` ${this.sep} ${this.rhs.debugString()}` : ``;
+        return `RuleStmt(${this.lhs.debugString()}${rhsStr})`;
     }
 }
 
@@ -261,6 +274,11 @@ class AssignStmt implements Stmt {
     eval(ctx: Context): void {
         // Implementation will be added later
     }
+    
+    debugString(): string {
+        const finalStr = this.is_final ? '$=' : '';
+        return `AssignStmt(${this.lhs.debugString()} ${this.op} ${finalStr}${this.rhs.debugString()})`;
+    }
 }
 
 class CommandStmt implements Stmt {
@@ -272,6 +290,10 @@ class CommandStmt implements Stmt {
 
     eval(ctx: Context): void {
         // Implementation will be added later
+    }
+    
+    debugString(): string {
+        return `CommandStmt(${this.expr.debugString()})`;
     }
 }
 
@@ -290,6 +312,11 @@ class IfStmt implements Stmt {
     eval(ctx: Context): void {
         // Implementation will be added later
     }
+    
+    debugString(): string {
+        const rhsStr = this.rhs ? ` ${this.rhs.debugString()}` : '';
+        return `IfStmt(${this.op} ${this.lhs.debugString()}${rhsStr})`;
+    }
 }
 
 class IncludeStmt implements Stmt {
@@ -302,6 +329,11 @@ class IncludeStmt implements Stmt {
 
     eval(ctx: Context): void {
         // Implementation will be added later
+    }
+    
+    debugString(): string {
+        const prefix = this.should_exist ? 'include' : '-include';
+        return `IncludeStmt(${prefix} ${this.expr.debugString()})`;
     }
 }
 
@@ -316,9 +348,14 @@ class ExportStmt implements Stmt {
     eval(ctx: Context): void {
         // Implementation will be added later
     }
+    
+    debugString(): string {
+        const prefix = this.is_export ? 'export' : 'unexport';
+        return `ExportStmt(${prefix} ${this.expr.debugString()})`;
+    }
 }
 
-export { Loc, AssignOp, AssignDirective, RuleSep, CondOp, Context, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func, Stmt, RuleStmt, AssignStmt, CommandStmt, IfStmt, IncludeStmt, ExportStmt };
+export { Loc, AssignOp, AssignDirective, RuleSep, CondOp, ParseExprOpt, Context, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func, Stmt, RuleStmt, AssignStmt, CommandStmt, IfStmt, IncludeStmt, ExportStmt };
 
 export class ParseErrorStmt implements Stmt {
     constructor(
