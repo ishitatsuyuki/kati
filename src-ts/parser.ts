@@ -1,10 +1,10 @@
-import { Stmt, Loc, AssignDirective, CommandStmt, ParseErrorStmt, RuleStmt, AssignStmt, RuleSep, AssignOp, ParseExprOpt, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func } from './core/ast';
+import { Stmt, Loc, AssignDirective, CommandStmt, ParseErrorStmt, RuleStmt, AssignStmt, RuleSep, AssignOp, ParseExprOpt, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func, IfStmt, CondOp, IncludeStmt, ExportStmt } from './core/ast';
 import { StrUtil } from './utils/strutil';
 
 type DirectiveHandler = (line: string, directive: string) => void;
 
 interface IfState {
-    stmt: any; // Will be IfStmt when implemented
+    stmt: IfStmt;
     isInElse: boolean;
     numNest: number;
 }
@@ -21,28 +21,48 @@ export class Parser {
     private ifStack: IfState[] = [];
     private defineName: string = '';
     private origLineWithDirectives: string = '';
+    
+    // Additional state properties for directive handling
+    private numDefineNest: number = 0;
+    private defineStart: number = 0;
+    private defineStartLine: number = 0;
+    private numIfNest: number = 0;
 
-    private static readonly makeDirectives: Map<string, DirectiveHandler> = new Map([
-        ['include', (line, directive) => { /* TODO */ }],
-        ['-include', (line, directive) => { /* TODO */ }], 
-        ['sinclude', (line, directive) => { /* TODO */ }],
-        ['define', (line, directive) => { /* TODO */ }],
-        ['ifdef', (line, directive) => { /* TODO */ }],
-        ['ifndef', (line, directive) => { /* TODO */ }],
-        ['ifeq', (line, directive) => { /* TODO */ }],
-        ['ifneq', (line, directive) => { /* TODO */ }],
-        ['else', (line, directive) => { /* TODO */ }],
-        ['endif', (line, directive) => { /* TODO */ }],
-        ['override', (line, directive) => { /* TODO */ }],
-        ['export', (line, directive) => { /* TODO */ }]
+    private readonly makeDirectives: Map<string, DirectiveHandler> = new Map([
+        ['include', this.parseInclude.bind(this)],
+        ['-include', this.parseInclude.bind(this)],
+        ['sinclude', this.parseInclude.bind(this)],
+        ['define', this.parseDefine.bind(this)],
+        ['ifdef', this.parseIfdef.bind(this)],
+        ['ifndef', this.parseIfdef.bind(this)],
+        ['ifeq', this.parseIfeq.bind(this)],
+        ['ifneq', this.parseIfeq.bind(this)],
+        ['else', this.parseElse.bind(this)],
+        ['endif', this.parseEndif.bind(this)],
+        ['override', this.parseOverride.bind(this)],
+        ['export', this.parseExport.bind(this)],
+        ['unexport', this.parseUnexport.bind(this)]
     ]);
 
-    private static readonly shortestDirectiveLen: number = Math.min(
-        ...Array.from(Parser.makeDirectives.keys()).map(k => k.length)
+    private readonly elseIfDirectives: Map<string, DirectiveHandler> = new Map([
+        ['ifdef', this.parseIfdef.bind(this)],
+        ['ifndef', this.parseIfdef.bind(this)],
+        ['ifeq', this.parseIfeq.bind(this)],
+        ['ifneq', this.parseIfeq.bind(this)]
+    ]);
+
+    private readonly assignDirectives: Map<string, DirectiveHandler> = new Map([
+        ['define', this.parseDefine.bind(this)],
+        ['export', this.parseExport.bind(this)],
+        ['override', this.parseOverride.bind(this)]
+    ]);
+
+    private readonly shortestDirectiveLen: number = Math.min(
+        ...Array.from(this.makeDirectives.keys()).map(k => k.length)
     );
 
-    private static readonly longestDirectiveLen: number = Math.max(
-        ...Array.from(Parser.makeDirectives.keys()).map(k => k.length)
+    private readonly longestDirectiveLen: number = Math.max(
+        ...Array.from(this.makeDirectives.keys()).map(k => k.length)
     );
 
     constructor(buf: string, filename: string, stmts: Stmt[]);
@@ -134,7 +154,7 @@ export class Parser {
             return;
         }
 
-        if (this.handleDirective(line, Parser.makeDirectives)) {
+        if (this.handleDirective(line, this.makeDirectives)) {
             return;
         }
 
@@ -142,11 +162,46 @@ export class Parser {
     }
 
     private parseInsideDefine(line: string): void {
-        // TODO: Implement define parsing
+        const trimmedLine = StrUtil.trimLeftSpace(line);
+        const directive = this.getDirective(trimmedLine);
+        
+        if (directive === 'define') {
+            this.numDefineNest++;
+        } else if (directive === 'endef') {
+            this.numDefineNest--;
+        }
+        
+        if (this.numDefineNest > 0) {
+            if (this.defineStart === 0) {
+                this.defineStart = this.l;
+            }
+            return;
+        }
+
+        // Handle endef
+        const rest = StrUtil.trimRightSpace(
+            StrUtil.removeComment(StrUtil.trimLeftSpace(line.substring(5))) // 5 = 'endef'.length
+        );
+        if (rest !== '') {
+            this.error(`extraneous text after 'endef' directive`);
+        }
+
+        const stmt = new AssignStmt(
+            { filename: this.loc.filename, lineno: this.defineStartLine },
+            this.parseExpr(this.loc, this.defineName),
+            this.parseExpr(this.loc, this.defineStart ? this.buf.substring(this.defineStart, this.l - 1) : '', ParseExprOpt.DEFINE),
+            this.defineStart ? this.buf.substring(this.defineStart, this.l - 1) : '',
+            AssignOp.EQ,
+            this.currentDirective,
+            false
+        );
+        
+        this.outStmts.push(stmt);
+        this.defineName = '';
     }
 
     private getDirective(line: string): string {
-        const prefix = line.substring(0, Parser.longestDirectiveLen + 1);
+        const prefix = line.substring(0, this.longestDirectiveLen + 1);
         const spaceIndex = prefix.search(/[ \t#]/);
         return spaceIndex === -1 ? prefix : prefix.substring(0, spaceIndex);
     }
@@ -469,41 +524,48 @@ export class Parser {
             return;
         }
 
-        const ruleStmt = new RuleStmt(this.loc, new Literal(this.loc, ''), RuleSep.NULL, null);
+        let lhs: Expr;
+        let ruleSep: RuleSep;
+        let rhs: Expr | null;
         
         if (sep === -1) {
             // No separator found - just a target
-            ruleStmt.lhs = this.parseExpr(this.loc, line);
-            ruleStmt.sep = RuleSep.NULL;
-            ruleStmt.rhs = null;
+            lhs = this.parseExpr(this.loc, line);
+            ruleSep = RuleSep.NULL;
+            rhs = null;
         } else {
             // Find additional separators in the part after the colon
             const found = StrUtil.findTwoOutsideParen(line.substring(sep + 1), '=', ';');
             
             if (found !== -1) {
                 const foundPos = found + sep + 1;
-                ruleStmt.lhs = this.parseExpr(this.loc, StrUtil.trimSpace(line.substring(0, foundPos)));
+                lhs = this.parseExpr(this.loc, StrUtil.trimSpace(line.substring(0, foundPos)));
                 
                 if (line[foundPos] === ';') {
-                    ruleStmt.sep = RuleSep.SEMICOLON;
+                    ruleSep = RuleSep.SEMICOLON;
+                    rhs = null;
                 } else if (line[foundPos] === '=') {
                     if (line.length > (foundPos + 2) && 
                         line[foundPos + 1] === '$' && 
                         line[foundPos + 2] === '=') {
-                        ruleStmt.sep = RuleSep.FINALEQ;
-                        ruleStmt.rhs = this.parseExpr(this.loc, StrUtil.trimLeftSpace(line.substring(foundPos + 3)));
+                        ruleSep = RuleSep.FINALEQ;
+                        rhs = this.parseExpr(this.loc, StrUtil.trimLeftSpace(line.substring(foundPos + 3)));
                     } else {
-                        ruleStmt.sep = RuleSep.EQ;
-                        ruleStmt.rhs = this.parseExpr(this.loc, StrUtil.trimLeftSpace(line.substring(foundPos + 1)));
+                        ruleSep = RuleSep.EQ;
+                        rhs = this.parseExpr(this.loc, StrUtil.trimLeftSpace(line.substring(foundPos + 1)));
                     }
+                } else {
+                    ruleSep = RuleSep.NULL;
+                    rhs = null;
                 }
             } else {
-                ruleStmt.lhs = this.parseExpr(this.loc, line);
-                ruleStmt.sep = RuleSep.NULL;
-                ruleStmt.rhs = null;
+                lhs = this.parseExpr(this.loc, line);
+                ruleSep = RuleSep.NULL;
+                rhs = null;
             }
         }
         
+        const ruleStmt = new RuleStmt(this.loc, lhs, ruleSep, rhs);
         this.outStmts.push(ruleStmt);
         this.afterRule = true;
     }
@@ -573,5 +635,219 @@ export class Parser {
     private error(msg: string): void {
         const stmt = new ParseErrorStmt(this.loc, msg);
         this.outStmts.push(stmt);
+    }
+
+    private checkIfStack(keyword: string): boolean {
+        if (this.ifStack.length === 0) {
+            this.error(`*** extraneous '${keyword}'.`);
+            return false;
+        }
+        return true;
+    }
+
+    private removeComment(line: string): string {
+        return StrUtil.removeComment(line);
+    }
+
+    private enterIf(stmt: IfStmt): void {
+        const st: IfState = {
+            stmt: stmt,
+            isInElse: false,
+            numNest: this.numIfNest
+        };
+        this.ifStack.push(st);
+        this.outStmts = stmt.true_stmts;
+    }
+
+    private createExport(line: string, isExport: boolean): void {
+        const stmt = new ExportStmt(
+            this.loc,
+            this.parseExpr(this.loc, line),
+            isExport
+        );
+        this.outStmts.push(stmt);
+    }
+
+    // Directive parsing methods
+
+    private parseInclude(line: string, directive: string): void {
+        const stmt = new IncludeStmt(
+            this.loc,
+            this.parseExpr(this.loc, line),
+            directive[0] === 'i' // 'include' vs '-include' or 'sinclude'
+        );
+        this.outStmts.push(stmt);
+        this.afterRule = false;
+    }
+
+    private parseDefine(line: string, directive: string): void {
+        if (line === '') {
+            this.error('*** empty variable name.');
+            return;
+        }
+        this.defineName = line;
+        this.numDefineNest = 1;
+        this.defineStart = 0;
+        this.defineStartLine = this.loc.lineno;
+        this.afterRule = false;
+    }
+
+    private parseIfdef(line: string, directive: string): void {
+        const stmt = new IfStmt(
+            this.loc,
+            directive.startsWith('ifn') ? CondOp.IFNDEF : CondOp.IFDEF,
+            this.parseExpr(this.loc, line),
+            null
+        );
+        this.outStmts.push(stmt);
+        this.enterIf(stmt);
+    }
+
+    private parseIfeq(line: string, directive: string): void {
+        const stmt = new IfStmt(
+            this.loc,
+            directive.startsWith('ifneq') ? CondOp.IFNEQ : CondOp.IFEQ,
+            new Literal(this.loc, ''), // placeholder, will be set by parseIfEqCond
+            null
+        );
+
+        if (!this.parseIfEqCond(line, stmt)) {
+            this.error('*** invalid syntax in conditional.');
+            return;
+        }
+
+        this.outStmts.push(stmt);
+        this.enterIf(stmt);
+    }
+
+    private parseElse(line: string, directive: string): void {
+        if (!this.checkIfStack('else')) {
+            return;
+        }
+
+        const st = this.ifStack[this.ifStack.length - 1];
+        if (st.isInElse) {
+            this.error("*** only one 'else' per conditional.");
+            return;
+        }
+
+        st.isInElse = true;
+        this.outStmts = st.stmt.false_stmts;
+
+        const nextIf = StrUtil.trimLeftSpace(line);
+        if (nextIf === '') {
+            return;
+        }
+
+        this.numIfNest = st.numNest + 1;
+        if (!this.handleDirective(nextIf, this.elseIfDirectives)) {
+            this.error(`extraneous text after 'else' directive`);
+        }
+        this.numIfNest = 0;
+    }
+
+    private parseEndif(line: string, directive: string): void {
+        if (!this.checkIfStack('endif')) {
+            return;
+        }
+
+        if (line !== '') {
+            this.error(`extraneous text after 'endif' directive`);
+            return;
+        }
+
+        const numNest = this.ifStack[this.ifStack.length - 1].numNest;
+        for (let i = 0; i <= numNest; i++) {
+            this.ifStack.pop();
+        }
+
+        if (this.ifStack.length === 0) {
+            this.outStmts = this.stmts;
+        } else {
+            const st = this.ifStack[this.ifStack.length - 1];
+            if (st.isInElse) {
+                this.outStmts = st.stmt.false_stmts;
+            } else {
+                this.outStmts = st.stmt.true_stmts;
+            }
+        }
+    }
+
+    private parseOverride(line: string, directive: string): void {
+        this.currentDirective = AssignDirective.OVERRIDE | this.currentDirective;
+        if (this.handleDirective(line, this.assignDirectives)) {
+            return;
+        }
+        if (this.isInExport()) {
+            this.createExport(line, true);
+        }
+        this.parseRuleOrAssign(line);
+    }
+
+    private parseExport(line: string, directive: string): void {
+        this.currentDirective = AssignDirective.EXPORT | this.currentDirective;
+        if (this.handleDirective(line, this.assignDirectives)) {
+            return;
+        }
+        this.createExport(line, true);
+        this.parseRuleOrAssign(line);
+    }
+
+    private parseUnexport(line: string, directive: string): void {
+        this.createExport(line, false);
+    }
+
+    private parseIfEqCond(s: string, stmt: IfStmt): boolean {
+        if (s === '') {
+            return false;
+        }
+
+        if (s[0] === '(' && s[s.length - 1] === ')') {
+            // Parenthesized form: (arg1,arg2)
+            const inner = s.substring(1, s.length - 1);
+            const commaPos = StrUtil.findOutsideParen(inner, ',');
+            if (commaPos === -1) {
+                return false;
+            }
+            
+            stmt.lhs = this.parseExpr(this.loc, inner.substring(0, commaPos));
+            stmt.rhs = this.parseExpr(this.loc, StrUtil.trimLeftSpace(inner.substring(commaPos + 1)));
+            return true;
+        } else {
+            // Quoted form: "arg1" "arg2"
+            let pos = 0;
+            const args: Expr[] = [];
+            
+            for (let i = 0; i < 2; i++) {
+                const trimmed = StrUtil.trimLeftSpace(s.substring(pos));
+                if (trimmed === '') {
+                    return false;
+                }
+                
+                const quote = trimmed[0];
+                if (quote !== '"' && quote !== "'") {
+                    return false;
+                }
+                
+                const end = trimmed.indexOf(quote, 1);
+                if (end === -1) {
+                    return false;
+                }
+                
+                const content = trimmed.substring(1, end);
+                args.push(this.parseExpr(this.loc, content));
+                pos += s.length - trimmed.length + end + 1;
+            }
+            
+            stmt.lhs = args[0];
+            stmt.rhs = args[1];
+            
+            const remaining = StrUtil.trimLeftSpace(s.substring(pos));
+            if (remaining !== '') {
+                // Warning: extraneous text after conditional
+                return true; // But still valid
+            }
+            return true;
+        }
     }
 }

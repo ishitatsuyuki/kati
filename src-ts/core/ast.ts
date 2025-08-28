@@ -1,3 +1,5 @@
+import { Pattern, joinStrings, splitSpace } from '../utils/strutil';
+
 interface Loc {
     filename: string;
     lineno: number;
@@ -118,7 +120,7 @@ class SymRef extends Value {
     
     eval(ctx: Context): string {
         // Will need proper ctx implementation
-        return `\${${this.name}}`;
+        return ctx.get(this.name);
     }
     
     isFunc(_ctx: Context): boolean {
@@ -146,8 +148,7 @@ class VarRef extends Value {
     
     eval(ctx: Context): string {
         const name = this.nameExpr.eval(ctx);
-        // Will need proper ctx implementation
-        return `\${${name}}`;
+        return ctx.get(name);
     }
     
     isFunc(_ctx: Context): boolean {
@@ -176,8 +177,17 @@ class VarSubst extends Value {
         const name = this.nameExpr.eval(ctx);
         const pat = this.pattern.eval(ctx);
         const sub = this.subst.eval(ctx);
-        // Will need proper pattern substitution implementation
-        return `\${${name}:${pat}=${sub}}`;
+        
+        const varValue = ctx.get(name) || '';
+        if (!varValue) {
+            return '';
+        }
+        
+        const pattern = new Pattern(pat);
+        const words = splitSpace(varValue);
+        const transformedWords = words.map((word: string) => pattern.appendSubst(word, sub));
+        
+        return joinStrings(transformedWords, ' ');
     }
     
     isFunc(ctx: Context): boolean {
@@ -366,5 +376,9 @@ export class ParseErrorStmt implements Stmt {
 
     eval(ctx: Context): void {
         // Implementation will be added later
+    }
+    
+    debugString(): string {
+        return `ParseErrorStmt(${this.msg})`;
     }
 }
