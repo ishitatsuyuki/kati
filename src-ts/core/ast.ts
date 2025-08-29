@@ -1,4 +1,5 @@
 import { Pattern, joinStrings, splitSpace } from '../utils/strutil';
+import { getFuncInfo } from './func.js';
 
 interface Loc {
     filename: string;
@@ -39,8 +40,10 @@ enum RuleSep {
     FINALEQ = 'FINALEQ'
 }
 
-class Context {
+export class Evaluator {
     private variables: Map<string, any> = new Map();
+    private _loc: Loc = { filename: '<unknown>', lineno: 0 };
+    private _eval_depth: number = 0;
 
     set(name: string, value: any) {
         this.variables.set(name, value);
@@ -49,13 +52,55 @@ class Context {
     get(name: string): any {
         return this.variables.get(name);
     }
+
+    // Evaluator interface implementation
+    error(msg: string): never {
+        throw new Error(msg);
+    }
+
+    lookupVar(name: string): any {
+        return this.variables.get(name);
+    }
+
+    avoid_io(): boolean {
+        // TODO: Implement proper IO avoidance logic
+        return false;
+    }
+
+    loc(): Loc {
+        return this._loc;
+    }
+
+    getShell(): string {
+        return process.env.SHELL || '/bin/sh';
+    }
+
+    getShellFlag(): string {
+        return '-c';
+    }
+
+    eval_depth(): number {
+        return this._eval_depth;
+    }
+
+    setLoc(loc: Loc): void {
+        this._loc = loc;
+    }
+
+    incrementEvalDepth(): void {
+        this._eval_depth++;
+    }
+
+    decrementEvalDepth(): void {
+        this._eval_depth--;
+    }
 }
 
 abstract class Value {
     constructor(public loc: Loc) {}
     
-    abstract eval(ctx: Context): string;
-    abstract isFunc(ctx: Context): boolean;
+    abstract eval(ev: Evaluator): string;
+    abstract isFunc(ev: Evaluator): boolean;
     abstract isLiteral(): boolean;
     abstract getLiteralValueUnsafe(): string;
     abstract debugString(): string;
@@ -66,11 +111,11 @@ class Literal extends Value {
         super(loc);
     }
     
-    eval(_ctx: Context): string {
+    eval(_ev: Evaluator): string {
         return this.s;
     }
     
-    isFunc(_ctx: Context): boolean {
+    isFunc(_ev: Evaluator): boolean {
         return false;
     }
     
@@ -92,12 +137,12 @@ class ValueList extends Value {
         super(loc);
     }
     
-    eval(ctx: Context): string {
-        return this.values.map(v => v.eval(ctx)).join('');
+    eval(ev: Evaluator): string {
+        return this.values.map(v => v.eval(ev)).join('');
     }
     
-    isFunc(ctx: Context): boolean {
-        return this.values.some(v => v.isFunc(ctx));
+    isFunc(ev: Evaluator): boolean {
+        return this.values.some(v => v.isFunc(ev));
     }
     
     isLiteral(): boolean {
@@ -118,12 +163,12 @@ class SymRef extends Value {
         super(loc);
     }
     
-    eval(ctx: Context): string {
-        // Will need proper ctx implementation
-        return ctx.get(this.name);
+    eval(ev: Evaluator): string {
+        // Will need proper ev implementation
+        return ev.get(this.name);
     }
     
-    isFunc(_ctx: Context): boolean {
+    isFunc(_ev: Evaluator): boolean {
         // Heuristic: if variable name is a number, likely a function parameter
         return /^\d+$/.test(this.name);
     }
@@ -146,12 +191,12 @@ class VarRef extends Value {
         super(loc);
     }
     
-    eval(ctx: Context): string {
-        const name = this.nameExpr.eval(ctx);
-        return ctx.get(name);
+    eval(ev: Evaluator): string {
+        const name = this.nameExpr.eval(ev);
+        return ev.get(name);
     }
     
-    isFunc(_ctx: Context): boolean {
+    isFunc(_ev: Evaluator): boolean {
         return true;
     }
     
@@ -173,12 +218,12 @@ class VarSubst extends Value {
         super(loc);
     }
     
-    eval(ctx: Context): string {
-        const name = this.nameExpr.eval(ctx);
-        const pat = this.pattern.eval(ctx);
-        const sub = this.subst.eval(ctx);
+    eval(ev: Evaluator): string {
+        const name = this.nameExpr.eval(ev);
+        const pat = this.pattern.eval(ev);
+        const sub = this.subst.eval(ev);
         
-        const varValue = ctx.get(name) || '';
+        const varValue = ev.get(name) || '';
         if (!varValue) {
             return '';
         }
@@ -190,8 +235,8 @@ class VarSubst extends Value {
         return joinStrings(transformedWords, ' ');
     }
     
-    isFunc(ctx: Context): boolean {
-        return this.nameExpr.isFunc(ctx) || this.pattern.isFunc(ctx) || this.subst.isFunc(ctx);
+    isFunc(ev: Evaluator): boolean {
+        return this.nameExpr.isFunc(ev) || this.pattern.isFunc(ev) || this.subst.isFunc(ev);
     }
     
     isLiteral(): boolean {
@@ -218,13 +263,32 @@ class Func extends Value {
         this.args.push(arg);
     }
     
-    eval(ctx: Context): string {
-        const argStrs = this.args.map(arg => arg.eval(ctx));
-        // Will need proper function implementation
-        return `\$(${this.name} ${argStrs.join(',')})`;
+    eval(ev: Evaluator): string {
+        const funcInfo = getFuncInfo(this.name);
+        if (!funcInfo) {
+            throw new Error(`Unknown function: ${this.name}`);
+        }
+
+        // Check argument count
+        if (funcInfo.hasVariadicArgs) {
+            if (this.args.length < funcInfo.minArgs) {
+                throw new Error(`Function ${this.name} expects at least ${funcInfo.minArgs} arguments, got ${this.args.length}`);
+            }
+        } else {
+            if (this.args.length < funcInfo.minArgs || this.args.length > funcInfo.maxArgs) {
+                throw new Error(`Function ${this.name} expects ${funcInfo.minArgs}-${funcInfo.maxArgs} arguments, got ${this.args.length}`);
+            }
+        }
+
+        // Call the function implementation
+        try {
+            return funcInfo.func(this.args, ev);
+        } catch (error) {
+            throw new Error(`Error in function ${this.name}: ${error}`);
+        }
     }
     
-    isFunc(_ctx: Context): boolean {
+    isFunc(_ev: Evaluator): boolean {
         return true;
     }
     
@@ -246,7 +310,7 @@ type Expr = Value;
 interface Stmt {
     loc: Loc;
     orig?: string | undefined;
-    eval(ctx: Context): void;
+    eval(ev: Evaluator): void;
     debugString(): string;
 }
 
@@ -259,7 +323,7 @@ class RuleStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(ctx: Context): void {
+    eval(_ev: Evaluator): void {
         // Implementation will be added later
     }
     
@@ -281,7 +345,7 @@ class AssignStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(ctx: Context): void {
+    eval(_ev: Evaluator): void {
         // Implementation will be added later
     }
     
@@ -298,7 +362,7 @@ class CommandStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(ctx: Context): void {
+    eval(_ev: Evaluator): void {
         // Implementation will be added later
     }
     
@@ -319,7 +383,7 @@ class IfStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(ctx: Context): void {
+    eval(_ev: Evaluator): void {
         // Implementation will be added later
     }
     
@@ -337,7 +401,7 @@ class IncludeStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(ctx: Context): void {
+    eval(_ev: Evaluator): void {
         // Implementation will be added later
     }
     
@@ -355,7 +419,7 @@ class ExportStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(ctx: Context): void {
+    eval(_ev: Evaluator): void {
         // Implementation will be added later
     }
     
@@ -365,7 +429,7 @@ class ExportStmt implements Stmt {
     }
 }
 
-export { Loc, AssignOp, AssignDirective, RuleSep, CondOp, ParseExprOpt, Context, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func, Stmt, RuleStmt, AssignStmt, CommandStmt, IfStmt, IncludeStmt, ExportStmt };
+export { Loc, AssignOp, AssignDirective, RuleSep, CondOp, ParseExprOpt, Evaluator as Context, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func, Stmt, RuleStmt, AssignStmt, CommandStmt, IfStmt, IncludeStmt, ExportStmt };
 
 export class ParseErrorStmt implements Stmt {
     constructor(
@@ -374,7 +438,7 @@ export class ParseErrorStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(ctx: Context): void {
+    eval(_ev: Evaluator): void {
         // Implementation will be added later
     }
     
