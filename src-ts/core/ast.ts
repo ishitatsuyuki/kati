@@ -1,10 +1,8 @@
 import { Pattern, joinStrings, splitSpace } from '../utils/strutil';
-import { getFuncInfo } from './func.js';
-
-interface Loc {
-    filename: string;
-    lineno: number;
-}
+import { getFuncInfo } from './func';
+import { Evaluator, Loc } from './evaluator';
+import * as fs from 'fs';
+import * as path from 'path';
 
 enum AssignOp {
     EQ = 'EQ',
@@ -38,62 +36,6 @@ enum RuleSep {
     SEMICOLON = 'SEMICOLON',
     EQ = 'EQ',
     FINALEQ = 'FINALEQ'
-}
-
-export class Evaluator {
-    private variables: Map<string, any> = new Map();
-    private _loc: Loc = { filename: '<unknown>', lineno: 0 };
-    private _eval_depth: number = 0;
-
-    set(name: string, value: any) {
-        this.variables.set(name, value);
-    }
-
-    get(name: string): any {
-        return this.variables.get(name);
-    }
-
-    // Evaluator interface implementation
-    error(msg: string): never {
-        throw new Error(msg);
-    }
-
-    lookupVar(name: string): any {
-        return this.variables.get(name);
-    }
-
-    avoid_io(): boolean {
-        // TODO: Implement proper IO avoidance logic
-        return false;
-    }
-
-    loc(): Loc {
-        return this._loc;
-    }
-
-    getShell(): string {
-        return process.env.SHELL || '/bin/sh';
-    }
-
-    getShellFlag(): string {
-        return '-c';
-    }
-
-    eval_depth(): number {
-        return this._eval_depth;
-    }
-
-    setLoc(loc: Loc): void {
-        this._loc = loc;
-    }
-
-    incrementEvalDepth(): void {
-        this._eval_depth++;
-    }
-
-    decrementEvalDepth(): void {
-        this._eval_depth--;
-    }
 }
 
 abstract class Value {
@@ -164,8 +106,8 @@ class SymRef extends Value {
     }
     
     eval(ev: Evaluator): string {
-        // Will need proper ev implementation
-        return ev.get(this.name);
+        const value = ev.get(this.name);
+        return value ? value.eval(ev) : '';
     }
     
     isFunc(_ev: Evaluator): boolean {
@@ -193,7 +135,8 @@ class VarRef extends Value {
     
     eval(ev: Evaluator): string {
         const name = this.nameExpr.eval(ev);
-        return ev.get(name);
+        const value = ev.get(name);
+        return value ? value.eval(ev) : '';
     }
     
     isFunc(_ev: Evaluator): boolean {
@@ -223,7 +166,8 @@ class VarSubst extends Value {
         const pat = this.pattern.eval(ev);
         const sub = this.subst.eval(ev);
         
-        const varValue = ev.get(name) || '';
+        const value = ev.get(name);
+        const varValue = value ? value.eval(ev) : '';
         if (!varValue) {
             return '';
         }
@@ -255,12 +199,16 @@ class VarSubst extends Value {
 class Func extends Value {
     private args: Value[] = [];
     
-    constructor(loc: Loc, private name: string, private _arity: number = 0, private _minArity: number = 0) {
+    constructor(loc: Loc, private name: string) {
         super(loc);
     }
     
     addArg(arg: Value): void {
         this.args.push(arg);
+    }
+    
+    getName(): string {
+        return this.name;
     }
     
     eval(ev: Evaluator): string {
@@ -269,23 +217,14 @@ class Func extends Value {
             throw new Error(`Unknown function: ${this.name}`);
         }
 
-        // Check argument count
-        if (funcInfo.hasVariadicArgs) {
-            if (this.args.length < funcInfo.minArgs) {
-                throw new Error(`Function ${this.name} expects at least ${funcInfo.minArgs} arguments, got ${this.args.length}`);
-            }
-        } else {
-            if (this.args.length < funcInfo.minArgs || this.args.length > funcInfo.maxArgs) {
-                throw new Error(`Function ${this.name} expects ${funcInfo.minArgs}-${funcInfo.maxArgs} arguments, got ${this.args.length}`);
-            }
+        // Check argument count using C++ arity semantics
+        const nargs = this.args.length;
+        
+        if (nargs < funcInfo.minArity) {
+            throw new Error(`*** insufficient number of arguments (${nargs}) to function '${this.name}'.`);
         }
-
-        // Call the function implementation
-        try {
-            return funcInfo.func(this.args, ev);
-        } catch (error) {
-            throw new Error(`Error in function ${this.name}: ${error}`);
-        }
+        
+        return funcInfo.func(this.args, ev);
     }
     
     isFunc(_ev: Evaluator): boolean {
@@ -323,8 +262,100 @@ class RuleStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(_ev: Evaluator): void {
-        // Implementation will be added later
+    eval(ev: Evaluator): void {
+        ev.setLoc(this.loc);
+        
+        // Evaluate the left-hand side (targets)
+        const beforeTerm = this.lhs.eval(ev);
+        
+        // Check for empty targets (see semicolon.mk comment in C++ code)
+        if (beforeTerm.match(/^\s*[;\s]*$/)) {
+            if (this.sep === RuleSep.SEMICOLON) {
+                ev.error("*** missing rule before commands.");
+            }
+            return;
+        }
+        
+        // Parse targets from the left-hand side
+        const colonPos = beforeTerm.indexOf(':');
+        if (colonPos === -1) {
+            ev.error("*** missing separator.");
+        }
+        
+        const targetsString = beforeTerm.substring(0, colonPos);
+        const afterTargets = beforeTerm.substring(colonPos + 1);
+        
+        // Split targets by whitespace and check for pattern rules
+        const targets = targetsString.trim().split(/\s+/).filter(t => t.length > 0);
+        let isPatternRule = false;
+        let patternRuleCount = 0;
+        
+        for (const target of targets) {
+            if (target.includes('%')) {
+                patternRuleCount++;
+                isPatternRule = true;
+            }
+        }
+        
+        // Check for double colon rules
+        let remainingAfterTargets = afterTargets;
+        let isDoubleColon = false;
+        if (remainingAfterTargets.startsWith(':')) {
+            isDoubleColon = true;
+            remainingAfterTargets = remainingAfterTargets.substring(1);
+        }
+        
+        // Check for rule-specific variable assignment
+        const separatorMatch = remainingAfterTargets.match(/^([^=;]*?)([=;])/);
+        let separator = '';
+        let separatorPos = -1;
+        
+        if (separatorMatch) {
+            separator = separatorMatch[2];
+            separatorPos = separatorMatch[1].length;
+        } else if (this.sep === RuleSep.EQ || this.sep === RuleSep.FINALEQ) {
+            separatorPos = remainingAfterTargets.length;
+            separator = '=';
+        }
+        
+        // Handle rule-specific variable assignment
+        if (separator === '=' && separatorPos > 0) {
+            // This would be handled by EvalRuleSpecificAssign in the C++ version
+            // For now, we'll skip the implementation details
+            console.log('Rule-specific variable assignment not fully implemented yet');
+            return;
+        }
+        
+        if (separatorPos === 0) {
+            ev.error("*** empty variable name.");
+        }
+        
+        // Create a rule object (simplified version)
+        const rule = {
+            loc: this.loc,
+            isDoubleColon,
+            isPatternRule,
+            targets,
+            prerequisites: [] as string[],
+            commands: [] as string[]
+        };
+        
+        // Parse prerequisites from the remaining string
+        if (separatorPos > 0) {
+            const prereqString = remainingAfterTargets.substring(0, separatorPos).trim();
+            if (prereqString) {
+                rule.prerequisites = prereqString.split(/\s+/).filter(p => p.length > 0);
+            }
+        }
+        
+        // Handle semicolon separator (inline command)
+        if (this.sep === RuleSep.SEMICOLON && this.rhs) {
+            const command = this.rhs.eval(ev);
+            rule.commands.push(command);
+        }
+        
+        console.log('Rule evaluated:', rule);
+        // In the full implementation, this rule would be added to the evaluator's rules list
     }
     
     debugString(): string {
@@ -334,6 +365,8 @@ class RuleStmt implements Stmt {
 }
 
 class AssignStmt implements Stmt {
+    private lhsSymCache: string | null = null;
+
     constructor(
         public loc: Loc,
         public lhs: Expr,
@@ -345,8 +378,52 @@ class AssignStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(_ev: Evaluator): void {
-        // Implementation will be added later
+    getLhsSymbol(ev: Evaluator): string {
+        // TODO: Remove sym cache
+        if (!this.lhs.isLiteral()) {
+            return this.lhs.eval(ev);
+        }
+
+        if (!this.lhsSymCache) {
+            this.lhsSymCache = this.lhs.getLiteralValueUnsafe();
+        }
+        return this.lhsSymCache;
+    }
+
+    eval(ev: Evaluator): void {
+        ev.setLoc(this.loc);
+        
+        const name = this.getLhsSymbol(ev);
+        const value = this.rhs.eval(ev);
+        
+        // Get current value for append operations
+        const currentVar = ev.get(name);
+        const currentValue = currentVar ? currentVar.eval(ev) : '';
+        
+        switch (this.op) {
+            case AssignOp.EQ:
+                // Recursively expanded variable - store the original Value, not evaluated string
+                ev.set(name, this.rhs);
+                break;
+                
+            case AssignOp.COLON_EQ:
+                // Simply expanded variable - store as literal
+                ev.set(name, new Literal(this.loc, value));
+                break;
+                
+            case AssignOp.PLUS_EQ:
+                // Append to variable
+                const appendValue = currentValue ? currentValue + ' ' + value : value;
+                ev.set(name, new Literal(this.loc, appendValue));
+                break;
+                
+            case AssignOp.QUESTION_EQ:
+                // Set only if undefined
+                if (!currentValue) {
+                    ev.set(name, new Literal(this.loc, value));
+                }
+                break;
+        }
     }
     
     debugString(): string {
@@ -362,8 +439,19 @@ class CommandStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(_ev: Evaluator): void {
-        // Implementation will be added later
+    eval(ev: Evaluator): void {
+        ev.setLoc(this.loc);
+        
+        const command = this.expr.eval(ev);
+        
+        // In a full implementation, this would:
+        // 1. Add the command to the current rule's command list
+        // 2. Handle command prefixes (@, -, +)
+        // 3. Process shell escaping and variable expansion
+        
+        // For now, we'll store it as a simple command
+        // This would integrate with the build system's command execution
+        console.log(`Command: ${command}`);
     }
     
     debugString(): string {
@@ -383,8 +471,47 @@ class IfStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(_ev: Evaluator): void {
-        // Implementation will be added later
+    eval(ev: Evaluator): void {
+        ev.setLoc(this.loc);
+        
+        let condition = false;
+        const lhsValue = this.lhs.eval(ev).trim();
+        
+        switch (this.op) {
+            case CondOp.IFDEF:
+                // Check if variable is defined and non-empty
+                condition = lhsValue !== '';
+                break;
+                
+            case CondOp.IFNDEF:
+                // Check if variable is undefined or empty
+                condition = lhsValue === '';
+                break;
+                
+            case CondOp.IFEQ:
+                if (this.rhs) {
+                    const rhsValue = this.rhs.eval(ev).trim();
+                    condition = lhsValue === rhsValue;
+                } else {
+                    condition = false;
+                }
+                break;
+                
+            case CondOp.IFNEQ:
+                if (this.rhs) {
+                    const rhsValue = this.rhs.eval(ev).trim();
+                    condition = lhsValue !== rhsValue;
+                } else {
+                    condition = true;
+                }
+                break;
+        }
+        
+        // Execute appropriate statement list
+        const stmts = condition ? this.true_stmts : this.false_stmts;
+        for (const stmt of stmts) {
+            stmt.eval(ev);
+        }
     }
     
     debugString(): string {
@@ -401,8 +528,49 @@ class IncludeStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(_ev: Evaluator): void {
-        // Implementation will be added later
+    eval(ev: Evaluator): void {
+        ev.setLoc(this.loc);
+        
+        const filename = this.expr.eval(ev);
+        
+        // Handle multiple space-separated filenames
+        const filenames = filename.trim().split(/\s+/).filter(f => f.length > 0);
+        
+        for (const file of filenames) {
+            let fullPath = file;
+            
+            // If not absolute, resolve relative to current file's directory
+            if (!path.isAbsolute(file)) {
+                const currentDir = path.dirname(this.loc.filename);
+                fullPath = path.resolve(currentDir, file);
+            }
+            
+            try {
+                if (!fs.existsSync(fullPath)) {
+                    if (this.should_exist) {
+                        ev.error(`*** No rule to make target '${file}', needed by '${this.loc.filename}'.  Stop.`);
+                    }
+                    // For -include, silently skip missing files
+                    continue;
+                }
+                
+                // In a full implementation, this would:
+                // 1. Parse the included file as a Makefile
+                // 2. Execute its statements in the current context
+                // 3. Handle recursive includes with cycle detection
+                
+                console.log(`Including file: ${fullPath}`);
+                
+                // For now, just log the inclusion
+                // A full implementation would require integrating with the parser
+                
+            } catch (error) {
+                if (this.should_exist) {
+                    ev.error(`Error including '${file}': ${error}`);
+                }
+                // For -include, silently skip errors
+            }
+        }
     }
     
     debugString(): string {
@@ -419,8 +587,39 @@ class ExportStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(_ev: Evaluator): void {
-        // Implementation will be added later
+    eval(ev: Evaluator): void {
+        ev.setLoc(this.loc);
+        
+        const variables = this.expr.eval(ev);
+        
+        // Handle multiple space-separated variable names
+        const varNames = variables.trim().split(/\s+/).filter(v => v.length > 0);
+        
+        if (varNames.length === 0) {
+            // Export/unexport all variables
+            if (this.is_export) {
+                console.log('Exporting all variables');
+                // In full implementation: mark all variables for export
+            } else {
+                console.log('Unexporting all variables');
+                // In full implementation: unmark all variables from export
+            }
+            return;
+        }
+        
+        for (const varName of varNames) {
+            if (this.is_export) {
+                // Export the variable to environment
+                const varValue = ev.get(varName);
+                const value = varValue ? varValue.eval(ev) : '';
+                process.env[varName] = value;
+                console.log(`Exported ${varName}=${value}`);
+            } else {
+                // Unexport the variable from environment
+                delete process.env[varName];
+                console.log(`Unexported ${varName}`);
+            }
+        }
     }
     
     debugString(): string {
@@ -429,7 +628,7 @@ class ExportStmt implements Stmt {
     }
 }
 
-export { Loc, AssignOp, AssignDirective, RuleSep, CondOp, ParseExprOpt, Evaluator as Context, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func, Stmt, RuleStmt, AssignStmt, CommandStmt, IfStmt, IncludeStmt, ExportStmt };
+export { AssignOp, AssignDirective, RuleSep, CondOp, ParseExprOpt, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func, Stmt, RuleStmt, AssignStmt, CommandStmt, IfStmt, IncludeStmt, ExportStmt };
 
 export class ParseErrorStmt implements Stmt {
     constructor(
@@ -438,8 +637,9 @@ export class ParseErrorStmt implements Stmt {
         public orig?: string
     ) {}
 
-    eval(_ev: Evaluator): void {
-        // Implementation will be added later
+    eval(ev: Evaluator): void {
+        ev.setLoc(this.loc);
+        ev.error(this.msg);
     }
     
     debugString(): string {

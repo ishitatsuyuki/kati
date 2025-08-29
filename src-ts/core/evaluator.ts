@@ -1,4 +1,7 @@
 import { KatiFlags } from '../cli/flags.js';
+import { Parser } from '../parser.js';
+import { Stmt, Value, Literal } from './ast.js';
+import * as fs from 'fs';
 
 export interface DepNode {
   target: string;
@@ -7,10 +10,42 @@ export interface DepNode {
   isPhony: boolean;
 }
 
+export interface Loc {
+  filename: string;
+  lineno: number;
+}
+
+export class Scope {
+  private undoMap: [string, Value | undefined][] = [];
+
+  constructor(private ev: Evaluator) {}
+
+  get(name: string): Value | undefined {
+    return this.ev.get(name);
+  }
+
+  set(name: string, val: string) {
+    this.undoMap.push([name, this.ev.get(name)]);
+    this.ev.setVariable(name, new Literal({ filename: '<scope>', lineno: 0 }, val));
+  }
+
+  undo() {
+    this.undoMap.reverse().forEach(([name, val]) => {
+      if (val === undefined) {
+        console.warn("TODO: unset variable.");
+      } else {
+        this.ev.set(name, val);
+      }
+    });
+  }
+}
+
 export class Evaluator {
   private flags: KatiFlags;
-  private variables: Map<string, string> = new Map();
+  private variables: Map<string, Value> = new Map();
   private rules: Map<string, DepNode> = new Map();
+  private _loc: Loc = { filename: '<unknown>', lineno: 0 };
+  private _eval_depth: number = 0;
 
   constructor(flags: KatiFlags) {
     this.flags = flags;
@@ -19,40 +54,54 @@ export class Evaluator {
 
   private initializeBuiltinVariables(): void {
     // Initialize built-in variables similar to the C++ version
-    this.variables.set('CC', process.env.CC || 'cc');
-    this.variables.set('CXX', process.env.CXX || (process.platform === 'darwin' ? 'c++' : 'g++'));
-    this.variables.set('AR', process.env.AR || 'ar');
-    this.variables.set('MAKE_VERSION', '4.2.1');
-    this.variables.set('KATI', 'tskati');
-    this.variables.set('SHELL', '/bin/sh');
-    this.variables.set('CURDIR', process.cwd());
+    this.setLiteral('CC', process.env.CC || 'cc');
+    this.setLiteral('CXX', process.env.CXX || (process.platform === 'darwin' ? 'c++' : 'g++'));
+    this.setLiteral('AR', process.env.AR || 'ar');
+    this.setLiteral('MAKE_VERSION', '4.2.1');
+    this.setLiteral('KATI', 'tskati');
+    this.setLiteral('SHELL', '/bin/sh');
+    this.setLiteral('CURDIR', process.cwd());
     
     if (this.flags.targets.length > 0) {
-      this.variables.set('MAKECMDGOALS', this.flags.targets.join(' '));
+      this.setLiteral('MAKECMDGOALS', this.flags.targets.join(' '));
     }
     
     // Copy environment variables
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined) {
-        this.variables.set(key, value);
+        this.setLiteral(key, value);
       }
     }
   }
 
   async parseMakefile(makefilePath: string): Promise<void> {
-    console.log(`*kati*: [PLACEHOLDER] Parsing makefile: ${makefilePath}`);
+    console.log(`*kati*: Parsing makefile: ${makefilePath}`);
     
-    // TODO: Implement actual makefile parsing
-    // For now, create a simple default rule
-    const defaultTarget = this.flags.targets[0] || 'all';
-    this.rules.set(defaultTarget, {
-      target: defaultTarget,
-      dependencies: [],
-      commands: [`echo "Building ${defaultTarget}"`],
-      isPhony: false
-    });
-    
-    console.log(`*kati*: [PLACEHOLDER] Created default rule for target: ${defaultTarget}`);
+    try {
+      const content = fs.readFileSync(makefilePath, 'utf8');
+      const statements: Stmt[] = [];
+      const parser = new Parser(content, makefilePath, statements);
+      
+      parser.parse();
+      
+      console.log(`*kati*: Parsed ${statements.length} statements from ${makefilePath}`);
+      
+      // Evaluate all statements
+      for (const stmt of statements) {
+        try {
+          stmt.eval(this);
+        } catch (error) {
+          console.error(`*kati*: Error evaluating statement: ${error}`);
+          throw error;
+        }
+      }
+      
+      console.log(`*kati*: Successfully evaluated makefile: ${makefilePath}`);
+      
+    } catch (error) {
+      console.error(`*kati*: Error parsing makefile ${makefilePath}: ${error}`);
+      throw error;
+    }
   }
 
   async buildDependencyGraph(targets: string[]): Promise<DepNode[]> {
@@ -139,11 +188,71 @@ export class Evaluator {
     return 0;
   }
 
-  getVariable(name: string): string | undefined {
+  getVariable(name: string): Value | undefined {
     return this.variables.get(name);
   }
 
-  setVariable(name: string, value: string): void {
+  setVariable(name: string, value: Value): void {
     this.variables.set(name, value);
+  }
+
+  set(name: string, value: Value) {
+    this.variables.set(name, value);
+  }
+
+  get(name: string): Value | undefined {
+    return this.variables.get(name);
+  }
+
+  private setLiteral(name: string, value: string): void {
+    this.variables.set(name, new Literal({ filename: '<builtin>', lineno: 0 }, value));
+  }
+
+  error(msg: string): never {
+    throw new Error(msg);
+  }
+
+  lookupVar(name: string): Value | undefined {
+    return this.variables.get(name);
+  }
+
+  withScope<T>(fn: (scope: Scope) => T): T {
+    const scope = new Scope(this);
+    const result = fn(scope);
+    scope.undo();
+    return result;
+  }
+
+  avoid_io(): boolean {
+    // TODO: Implement proper IO avoidance logic for ninja generation
+    return false;
+  }
+
+  loc(): Loc {
+    return this._loc;
+  }
+
+  getShell(): string {
+    return process.env.SHELL || '/bin/sh';
+  }
+
+  getShellFlag(): string {
+    return '-c';
+  }
+
+  eval_depth(): number {
+    return this._eval_depth;
+  }
+
+  setLoc(loc: Loc): void {
+    this._loc = loc;
+  }
+
+  incrementEvalDepth(): void {
+    this._eval_depth++;
+  }
+
+  decrementEvalDepth(): void {
+    this._eval_depth--;
   }
 }

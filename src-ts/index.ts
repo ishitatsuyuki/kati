@@ -3,8 +3,8 @@
 import { Command } from 'commander';
 import * as fs from 'fs';
 import * as os from 'os';
-import { KatiFlags, createDefaultFlags } from './cli/flags.js';
-import { run } from './cli/main.js';
+import { KatiFlags, createDefaultFlags } from './cli/flags';
+import { run } from './cli/main';
 
 const program = new Command();
 

@@ -1,5 +1,7 @@
-import { Stmt, Loc, AssignDirective, CommandStmt, ParseErrorStmt, RuleStmt, AssignStmt, RuleSep, AssignOp, ParseExprOpt, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func, IfStmt, CondOp, IncludeStmt, ExportStmt } from './core/ast';
+import { Stmt, AssignDirective, CommandStmt, ParseErrorStmt, RuleStmt, AssignStmt, RuleSep, AssignOp, ParseExprOpt, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func, IfStmt, CondOp, IncludeStmt, ExportStmt } from './core/ast';
+import { Loc } from './core/evaluator.js';
 import { StrUtil } from './utils/strutil';
+import { FuncInfo, getFuncInfo } from './core/func';
 
 type DirectiveHandler = (line: string, directive: string) => void;
 
@@ -214,7 +216,8 @@ export class Parser {
             return false;
         }
 
-        handler.call(this, line, directive);
+        const lineWithoutDirective = StrUtil.trimLeftSpace(line.substring(directive.length));
+        handler.call(this, lineWithoutDirective, directive);
         return true;
     }
 
@@ -448,15 +451,29 @@ export class Parser {
         let i = startIndex;
         let nargs = 1; // Functions have at least 1 argument (the function name itself is not counted)
         
-        const funcTerms = [terms[0], ','];
+        // Get function info to check arity limits
+        const funcInfo = this.getFuncInfo(func);
+        
+        let funcTerms = [terms[0], ','];
         
         while (i < s.length) {
+            // Skip whitespace
             if (s[i] === ' ' || s[i] === '\t') {
                 i++;
                 continue;
             }
 
-            const argResult = this.parseExprImpl(loc, s.substring(i), funcTerms, ParseExprOpt.FUNC, true);
+            // Check if we should stop parsing due to arity limit
+            if (funcInfo && funcInfo.arity > 0 && nargs >= funcInfo.arity) {
+                // Stop parsing more arguments, but consume up to the closing delimiter
+                funcTerms = [terms[0]];
+            }
+
+            const shouldTrimSpace = funcInfo?.trimSpace || false;
+            const shouldTrimRightFirst = funcInfo?.trimRightFirst || false;
+            const trimRightSpace = shouldTrimRightFirst && nargs === 1 ? true : shouldTrimSpace;
+
+            const argResult = this.parseExprImpl(loc, s.substring(i), funcTerms, ParseExprOpt.FUNC, trimRightSpace);
             func.addArg(argResult.expr);
             i += argResult.index;
 
@@ -476,6 +493,15 @@ export class Parser {
         }
 
         return i;
+    }
+
+    private getFuncInfo(func: Func): FuncInfo | null {
+        const funcName = func.getName();
+        return this.getFuncInfoByName(funcName);
+    }
+
+    private getFuncInfoByName(name: string): FuncInfo | null {
+        return getFuncInfo(name);
     }
 
     private shouldHandleComments(opt: ParseExprOpt): boolean {

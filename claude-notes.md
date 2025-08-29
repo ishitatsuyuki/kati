@@ -6,6 +6,7 @@
 
 TODO:
 * Line number is wrong
+* Literal init is a mess
 
 trickiness
 * variable scopes
