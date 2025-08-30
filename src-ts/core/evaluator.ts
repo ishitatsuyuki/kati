@@ -2,7 +2,7 @@ import {KatiFlags} from '../cli/flags';
 import {Parser} from '../parser';
 import {Stmt, Value, Literal} from './ast';
 import {Vars, Var, SimpleVar, VarOrigin} from './var';
-import {Rule, DepNode, NamedDepNode, Symbol, Intern, makeDep, DepVars} from './dep';
+import {Rule, DepNode, NamedDepNode, Symbol, makeDep, DepVars} from './dep';
 import * as fs from 'fs';
 
 // Legacy interface - replaced by dep.ts DepNode
@@ -120,7 +120,7 @@ export class Evaluator {
       `*kati*: Building dependency graph for targets: ${targets.join(', ')}`,
     );
 
-    const symbolTargets = targets.map(t => Intern(t));
+    const symbolTargets = targets;
     const nodes = makeDep(this.rules, this.ruleVars, symbolTargets);
     
     console.log(`*kati*: Built dependency graph with ${nodes.length} nodes`);
@@ -144,9 +144,9 @@ export class Evaluator {
     ];
 
     for (const {name, node} of nodes) {
-      ninjaContent.push(`build ${name.str()}: PLACEHOLDER`);
+      ninjaContent.push(`build ${name}: PLACEHOLDER`);
       ninjaContent.push(`  cmd = ${node.cmds.join(' && ')}`);
-      ninjaContent.push(`  desc = Building ${name.str()}`);
+      ninjaContent.push(`  desc = Building ${name}`);
       ninjaContent.push('');
     }
 
@@ -171,7 +171,7 @@ export class Evaluator {
     // TODO: Implement actual command execution
     for (const {name, node} of nodes) {
       if (!this.flags.isSilentMode) {
-        console.log(`*kati*: Building target: ${name.str()}`);
+        console.log(`*kati*: Building target: ${name}`);
       }
 
       for (const command of node.cmds) {

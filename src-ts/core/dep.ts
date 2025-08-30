@@ -3,55 +3,8 @@ import {Expr} from './ast';
 import {Var, Vars} from './var';
 import {Pattern, hasPrefix, hasSuffix} from '../utils/strutil';
 
-// Symbol interning system for memory efficiency and fast comparison
-class SymbolTable {
-  private static symbols = new Map<string, Symbol>();
-  private static nextId = 0;
-
-  static intern(str: string): Symbol {
-    let symbol = this.symbols.get(str);
-    if (!symbol) {
-      symbol = new Symbol(str, this.nextId++);
-      this.symbols.set(str, symbol);
-    }
-    return symbol;
-  }
-}
-
-export class Symbol {
-  constructor(
-    private str_: string,
-    private id_: number,
-  ) {}
-
-  str(): string {
-    return this.str_;
-  }
-
-  id(): number {
-    return this.id_;
-  }
-
-  get(index: number): string {
-    return this.str_[index] || '';
-  }
-
-  empty(): boolean {
-    return this.str_.length === 0;
-  }
-
-  isValid(): boolean {
-    return this.id_ >= 0;
-  }
-
-  c_str(): string {
-    return this.str_;
-  }
-}
-
-export function Intern(str: string): Symbol {
-  return SymbolTable.intern(str);
-}
+export type Symbol = string;
+export type SymbolSet = Set<string>;
 
 // Type definitions for dependency nodes and rules
 export interface DepNode {
@@ -95,7 +48,6 @@ export interface Rule {
 }
 
 export type DepVars = Map<Symbol, Var>;
-type SymbolSet = Set<Symbol>;
 
 // Helper functions
 function stripExt(path: string): string {
@@ -117,10 +69,7 @@ function getExt(path: string): string {
 }
 
 function replaceSuffix(s: Symbol, newsuf: Symbol): Symbol {
-  let r = stripExt(s.str());
-  r += '.';
-  r += newsuf.str();
-  return Intern(r);
+  return stripExt(s) + '.' + newsuf;
 }
 
 function applyOutputPattern(
@@ -147,10 +96,10 @@ function applyOutputPattern(
     throw new Error('Multiple output patterns not supported');
   }
 
-  const pat = new Pattern(rule.output_patterns[0].str());
+  const pat = new Pattern(rule.output_patterns[0]);
   for (const input of inputs) {
-    const buf = pat.appendSubst(output.str(), input.str());
-    outInputs.push(Intern(buf));
+    const buf = pat.appendSubst(output, input);
+    outInputs.push(buf);
   }
 }
 
@@ -209,7 +158,7 @@ class RuleTrie {
 }
 
 function isSuffixRule(output: Symbol): boolean {
-  const str = output.str();
+  const str = output;
   if (str.length === 0 || !isSpecialTarget(output)) return false;
 
   const rest = str.substring(1);
@@ -224,7 +173,7 @@ function isSuffixRule(output: Symbol): boolean {
 }
 
 export function isSpecialTarget(output: Symbol): boolean {
-  const str = output.str();
+  const str = output;
   return str.length >= 2 && str[0] === '.' && str[1] !== '.';
 }
 
@@ -248,15 +197,15 @@ class RuleMerger {
 
   setImplicitOutput(output: Symbol, p: Symbol, merger: RuleMerger): void {
     if (!merger.primary_rule) {
-      throw new Error(`*** implicit output \`${output.str()}' on phony target \`${p.str()}'`);
+      throw new Error(`*** implicit output \`${output}' on phony target \`${p}'`);
     }
     if (this.parent) {
       throw new Error(
-        `*** implicit output \`${output.str()}' of \`${p.str()}' was already defined by \`${this.parent_sym?.str()}'`,
+        `*** implicit output \`${output}' of \`${p}' was already defined by \`${this.parent_sym}'`,
       );
     }
     if (this.primary_rule) {
-      throw new Error(`*** implicit output \`${output.str()}' may not have commands`);
+      throw new Error(`*** implicit output \`${output}' may not have commands`);
     }
     this.parent = merger;
     this.parent_sym = p;
@@ -266,7 +215,7 @@ class RuleMerger {
     if (this.rules.length === 0) {
       this.is_double_colon = rule.is_double_colon;
     } else if (this.is_double_colon !== rule.is_double_colon) {
-      throw new Error(`*** target file \`${output.str()}' has both : and :: entries.`);
+      throw new Error(`*** target file \`${output}' has both : and :: entries.`);
     }
 
     if (
@@ -363,11 +312,11 @@ class DepBuilder {
   private phony_ = new Set<Symbol>();
   private restat_ = new Set<Symbol>();
 
-  private depfile_var_name_ = Intern('.KATI_DEPFILE');
-  private implicit_outputs_var_name_ = Intern('.KATI_IMPLICIT_OUTPUTS');
-  private ninja_pool_var_name_ = Intern('.KATI_NINJA_POOL');
-  private validations_var_name_ = Intern('.KATI_VALIDATIONS');
-  private tags_var_name_ = Intern('.KATI_TAGS');
+  private depfile_var_name_ = '.KATI_DEPFILE';
+  private implicit_outputs_var_name_ = '.KATI_IMPLICIT_OUTPUTS';
+  private ninja_pool_var_name_ = '.KATI_NINJA_POOL';
+  private validations_var_name_ = '.KATI_VALIDATIONS';
+  private tags_var_name_ = '.KATI_TAGS';
 
   constructor(rules: Rule[], ruleVars: Map<Symbol, DepVars>) {
     this.rule_vars_ = ruleVars;
@@ -431,14 +380,14 @@ class DepBuilder {
   private populateSuffixRule(rule: Rule, output: Symbol): boolean {
     if (!isSuffixRule(output)) return false;
 
-    const rest = output.str().substring(1);
+    const rest = output.substring(1);
     const dotIndex = rest.indexOf('.');
     const inputSuffix = rest.substring(0, dotIndex);
     const outputSuffix = rest.substring(dotIndex + 1);
 
     const suffixRule = {
       ...rule,
-      inputs: [Intern(inputSuffix)],
+      inputs: [inputSuffix],
       is_suffix_rule: true,
     };
 
@@ -454,21 +403,21 @@ class DepBuilder {
   private populateImplicitRule(rule: Rule): void {
     for (const outputPattern of rule.output_patterns) {
       // Add checks for ignorable implicit rules (RCS/SCCS) here if needed
-      this.implicit_rules_.add(outputPattern.str(), rule);
+      this.implicit_rules_.add(outputPattern, rule);
     }
   }
 
   private handleSpecialTargets(): void {
     // Handle .PHONY targets
-    const phonyTargets = this.getRuleInputs(Intern('.PHONY'));
+    const phonyTargets = this.getRuleInputs('.PHONY');
     if (phonyTargets) {
       for (const target of phonyTargets) {
         this.phony_.add(target);
       }
     }
 
-    // Handle .KATI_RESTAT targets  
-    const restatTargets = this.getRuleInputs(Intern('.KATI_RESTAT'));
+    // Handle .KATI_RESTAT targets
+    const restatTargets = this.getRuleInputs('.KATI_RESTAT');
     if (restatTargets) {
       for (const target of restatTargets) {
         this.restat_.add(target);
@@ -476,7 +425,7 @@ class DepBuilder {
     }
 
     // Handle .SUFFIXES
-    const suffixTargets = this.getRuleInputs(Intern('.SUFFIXES'));
+    const suffixTargets = this.getRuleInputs('.SUFFIXES');
     if (suffixTargets) {
       if (suffixTargets.length === 0) {
         this.suffix_rules_.clear();
@@ -514,7 +463,7 @@ class DepBuilder {
     const nodes: NamedDepNode[] = [];
 
     for (const target of targetList) {
-      const node = this.buildPlan(target, Intern(''));
+      const node = this.buildPlan(target, '');
       nodes.push({name: target, node});
     }
 
@@ -574,7 +523,7 @@ class DepBuilder {
     }
 
     node.has_rule = true;
-    node.is_default_target = this.first_rule_?.str() === output.str();
+    node.is_default_target = this.first_rule_ === output;
 
     return node;
   }

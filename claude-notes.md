@@ -3,6 +3,7 @@
 * Write something first, rewrite idioms later
 * Put a TODO for unimplemented items, and emit a warning if an unimplemented code path is triggered
 * Always make a list of things to implement
+* Logger should come first
 
 TODO:
 * Line number is wrong
@@ -11,3 +12,4 @@ TODO:
 trickiness
 * variable scopes
 * var dep tracking
+* no more symbols / interns

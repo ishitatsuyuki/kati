@@ -2,7 +2,7 @@ import {Pattern, joinStrings, splitSpace} from '../utils/strutil';
 import {getFuncInfo} from './func';
 import {Evaluator, Loc} from './evaluator';
 import {SimpleVar, RecursiveVar, VarOrigin} from './var';
-import {Rule, Symbol, Intern} from './dep';
+import {Rule, Symbol} from './dep';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -369,10 +369,10 @@ class RuleStmt implements Stmt {
       loc: this.loc,
       cmd_loc: () => this.loc,
       cmd_lineno: null,
-      outputs: isPatternRule ? [] : targetStrings.map(t => Intern(t)),
-      inputs: prerequisites.map(p => Intern(p)),
-      order_only_inputs: orderOnlyInputs.map(p => Intern(p)),
-      output_patterns: isPatternRule ? targetStrings.map(t => Intern(t)) : [],
+      outputs: isPatternRule ? [] : targetStrings.map(t => (t)),
+      inputs: prerequisites.map(p => (p)),
+      order_only_inputs: orderOnlyInputs.map(p => (p)),
+      output_patterns: isPatternRule ? targetStrings.map(t => (t)) : [],
       cmds: [],
       is_double_colon: isDoubleColon,
       is_suffix_rule: false, // Will be detected in DepBuilder
