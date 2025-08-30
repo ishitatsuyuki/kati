@@ -1,6 +1,42 @@
 import * as fs from 'fs';
 import {KatiFlags} from './flags';
 import {Evaluator} from '../core/evaluator';
+import {Parser} from '../parser';
+import {Stmt} from '../core/ast';
+
+function stmtToDebugString(stmt: Stmt): string {
+  return stmt.debugString();
+}
+
+function parseAndDumpDebugString(filename: string): void {
+  try {
+    // Read the makefile
+    const content = fs.readFileSync(filename, 'utf8');
+
+    // Create statements array and parser
+    const stmts: Stmt[] = [];
+    const parser = new Parser(content, filename, stmts);
+
+    // Parse the content
+    parser.parse();
+
+    // Dump debug strings for all statements
+    console.log(`=== Debug dump for ${filename} ===`);
+    console.log(`Found ${stmts.length} statements:`);
+    console.log('');
+
+    stmts.forEach((stmt, index) => {
+      console.log(
+        `[${index}] ${stmt.constructor.name} at ${stmt.loc.filename}:${stmt.loc.lineno}`,
+      );
+      console.log(`    ${stmtToDebugString(stmt)}`);
+      console.log('');
+    });
+  } catch (error) {
+    console.error(`Error parsing ${filename}:`, error);
+    process.exit(1);
+  }
+}
 
 export async function run(flags: KatiFlags): Promise<number> {
   const startTime = Date.now();
@@ -22,6 +58,12 @@ export async function run(flags: KatiFlags): Promise<number> {
   if (!fs.existsSync(flags.makefile!)) {
     console.error(`*kati*: Error: Makefile '${flags.makefile}' not found`);
     return 1;
+  }
+
+  // Handle parse-only mode
+  if (flags.isParseOnly) {
+    parseAndDumpDebugString(flags.makefile!);
+    return 0;
   }
 
   try {

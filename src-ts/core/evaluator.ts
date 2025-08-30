@@ -3,15 +3,8 @@ import {Parser} from '../parser';
 import {Stmt, Value, Literal} from './ast';
 import {Vars, Var, SimpleVar, VarOrigin} from './var';
 import {Rule, DepNode, NamedDepNode, Symbol, makeDep, DepVars} from './dep';
+import {exec} from './exec';
 import * as fs from 'fs';
-
-// Legacy interface - replaced by dep.ts DepNode
-export interface LegacyDepNode {
-  target: string;
-  dependencies: string[];
-  commands: string[];
-  isPhony: boolean;
-}
 
 export interface MutableLoc {
   filename: string;
@@ -156,36 +149,15 @@ export class Evaluator {
   }
 
   async execute(nodes: NamedDepNode[]): Promise<number> {
-    console.log(`*kati*: [PLACEHOLDER] Executing ${nodes.length} targets`);
+    console.log(`*kati*: Executing ${nodes.length} targets`);
 
-    if (this.flags.isDryRun) {
-      console.log('*kati*: [DRY RUN] Would execute:');
-      for (const {name, node} of nodes) {
-        for (const command of node.cmds) {
-          console.log(`[DRY RUN] ${command}`);
-        }
-      }
+    try {
+      await exec(nodes, this);
       return 0;
+    } catch (error) {
+      console.error(`*kati*: Execution failed: ${error}`);
+      return 1;
     }
-
-    // TODO: Implement actual command execution
-    for (const {name, node} of nodes) {
-      if (!this.flags.isSilentMode) {
-        console.log(`*kati*: Building target: ${name}`);
-      }
-
-      for (const command of node.cmds) {
-        if (!this.flags.isSilentMode) {
-          console.log(command);
-        }
-
-        // TODO: Actually execute the command
-        // For now, just simulate execution
-        console.log(`*kati*: [PLACEHOLDER] Executed: ${command}`);
-      }
-    }
-
-    return 0;
   }
 
   getVar(name: string): Var {
@@ -233,8 +205,7 @@ export class Evaluator {
   }
 
   avoid_io(): boolean {
-    // TODO: Implement proper IO avoidance logic for ninja generation
-    return false;
+    return this.flags.isDryRun;
   }
 
   loc(): Loc {
@@ -285,5 +256,9 @@ export class Evaluator {
 
   getRules(): Rule[] {
     return [...this.rules];
+  }
+
+  getFlags(): KatiFlags {
+    return this.flags;
   }
 }

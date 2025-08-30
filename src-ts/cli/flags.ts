@@ -14,6 +14,7 @@ export interface KatiFlags {
   isDryRun: boolean;
   isSilentMode: boolean;
   isSyntaxCheckOnly: boolean;
+  isParseOnly: boolean;
   regen: boolean;
   regenDebug: boolean;
   regenIgnoringKatiBinary: boolean;
@@ -79,6 +80,7 @@ export function createDefaultFlags(): KatiFlags {
     isDryRun: false,
     isSilentMode: false,
     isSyntaxCheckOnly: false,
+    isParseOnly: false,
     regen: false,
     regenDebug: false,
     regenIgnoringKatiBinary: false,

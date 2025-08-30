@@ -25,11 +25,9 @@
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.14.0",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
-  "dependencies": {
-    "commander": "^14.0.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^24.3.0",
     "ts-node": "^10.9.2",

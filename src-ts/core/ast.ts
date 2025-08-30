@@ -462,12 +462,13 @@ class AssignStmt implements Stmt {
             currentVar.appendVar(ev, this.rhs);
           } else {
             // Create new variable if it doesn't exist
-            const newValue = this.rhs.eval(ev);
-            const newVar = new SimpleVar(
+            const newValue = this.rhs;
+            const newVar = new RecursiveVar(
               newValue,
               VarOrigin.FILE,
               null,
               this.loc,
+              this.orig_rhs,
             );
             ev.setVar(name, newVar);
           }

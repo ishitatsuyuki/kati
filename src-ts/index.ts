@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 
-import {Command} from 'commander';
+import {parseArgs} from 'node:util';
 import * as fs from 'fs';
 import * as os from 'os';
 import {KatiFlags, createDefaultFlags} from './cli/flags';
 import {run} from './cli/main';
-
-const program = new Command();
 
 function handleRealpath(args: string[]): void {
   for (const arg of args) {
@@ -32,44 +30,78 @@ function findFirstMakefile(): string | undefined {
 function parseCommandLine(): KatiFlags {
   const flags = createDefaultFlags();
 
-  program
-    .name('tskati')
-    .description('TypeScript port of Kati (GNU make clone)')
-    .version('1.0.0')
-    .option('-f, --file <makefile>', 'Read makefile as the makefile')
-    .option(
-      '-C, --directory <dir>',
-      'Change to directory before doing anything',
-    )
-    .option(
-      '-j, --jobs <n>',
-      'Number of jobs to run simultaneously',
-      value => parseInt(value, 10),
-      1,
-    )
-    .option('-n, --dry-run', "Don't actually run any commands; just print them")
-    .option('-s, --silent', "Don't print the commands as they are executed")
-    .option('--ninja', 'Generate ninja build file')
-    .option('--regen', 'Regenerate ninja file when needed')
-    .option('--regen_debug', 'Debug ninja regeneration')
-    .option('--gen_all_targets', 'Generate all targets')
-    .option('--use_find_emulator', 'Use find emulator')
-    .option('--detect_android_echo', 'Detect Android echo')
-    .option('--detect_depfiles', 'Detect dependency files')
-    .option('--dump_kati_stamp', 'Dump kati stamp')
-    .option('--dump_include_graph <file>', 'Dump include graph to file')
-    .option('--enable_debug', 'Enable debug output')
-    .option('--enable_kati_warnings', 'Enable kati warnings')
-    .option('--enable_stat_logs', 'Enable stat logs')
-    .option('--color_warnings', 'Colorize warning output')
-    .option('--no_builtin_rules', "Don't use built-in rules")
-    .option('--syntax_check_only', "Only check syntax, don't execute")
-    .argument('[targets...]', 'Build targets')
-    .allowUnknownOption()
-    .parse();
+  const {values, positionals} = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      file: {type: 'string', short: 'f'},
+      directory: {type: 'string', short: 'C'},
+      jobs: {type: 'string', short: 'j'},
+      'dry-run': {type: 'boolean', short: 'n'},
+      silent: {type: 'boolean', short: 's'},
+      ninja: {type: 'boolean'},
+      regen: {type: 'boolean'},
+      regen_debug: {type: 'boolean'},
+      gen_all_targets: {type: 'boolean'},
+      use_find_emulator: {type: 'boolean'},
+      detect_android_echo: {type: 'boolean'},
+      detect_depfiles: {type: 'boolean'},
+      dump_kati_stamp: {type: 'boolean'},
+      dump_include_graph: {type: 'string'},
+      enable_debug: {type: 'boolean'},
+      enable_kati_warnings: {type: 'boolean'},
+      enable_stat_logs: {type: 'boolean'},
+      color_warnings: {type: 'boolean'},
+      no_builtin_rules: {type: 'boolean'},
+      syntax_check_only: {type: 'boolean'},
+      parse_only: {type: 'boolean'},
+      help: {type: 'boolean', short: 'h'},
+      version: {type: 'boolean', short: 'v'},
+    },
+    allowPositionals: true,
+    strict: false,
+  });
 
-  const options = program.opts();
-  const targets = program.args;
+  if (values.help) {
+    console.log(`tskati - TypeScript port of Kati (GNU make clone)
+
+Usage: tskati [options] [targets...]
+
+Options:
+  -f, --file <makefile>         Read makefile as the makefile
+  -C, --directory <dir>         Change to directory before doing anything
+  -j, --jobs <n>               Number of jobs to run simultaneously
+  -n, --dry-run                Don't actually run any commands; just print them
+  -s, --silent                 Don't print the commands as they are executed
+  --ninja                      Generate ninja build file
+  --regen                      Regenerate ninja file when needed
+  --regen_debug                Debug ninja regeneration
+  --gen_all_targets            Generate all targets
+  --use_find_emulator          Use find emulator
+  --detect_android_echo        Detect Android echo
+  --detect_depfiles            Detect dependency files
+  --dump_kati_stamp            Dump kati stamp
+  --dump_include_graph <file>  Dump include graph to file
+  --enable_debug               Enable debug output
+  --enable_kati_warnings       Enable kati warnings
+  --enable_stat_logs           Enable stat logs
+  --color_warnings             Colorize warning output
+  --no_builtin_rules           Don't use built-in rules
+  --syntax_check_only          Only check syntax, don't execute
+  --parse_only                 Parse makefile and dump debug information only
+  -h, --help                   Display this help message
+  -v, --version                Display version information
+
+Arguments:
+  [targets...]                 Build targets`);
+    process.exit(0);
+  }
+
+  if (values.version) {
+    console.log('tskati 1.0.0');
+    process.exit(0);
+  }
+
+  const targets = positionals;
 
   // Handle special cases first
   const argv = process.argv.slice(2);
@@ -83,28 +115,29 @@ function parseCommandLine(): KatiFlags {
     }
   }
 
-  // Map commander options to flags
-  if (options.file) flags.makefile = options.file;
-  if (options.directory) flags.workingDir = options.directory;
-  if (options.jobs) flags.numJobs = options.jobs;
-  if (options.dryRun) flags.isDryRun = true;
-  if (options.silent) flags.isSilentMode = true;
-  if (options.ninja) flags.generateNinja = true;
-  if (options.regen) flags.regen = true;
-  if (options.regen_debug) flags.regenDebug = true;
-  if (options.gen_all_targets) flags.genAllTargets = true;
-  if (options.use_find_emulator) flags.useFindEmulator = true;
-  if (options.detect_android_echo) flags.detectAndroidEcho = true;
-  if (options.detect_depfiles) flags.detectDepfiles = true;
-  if (options.dump_kati_stamp) flags.dumpKatiStamp = true;
-  if (options.dump_include_graph)
-    flags.dumpIncludeGraph = options.dump_include_graph;
-  if (options.enable_debug) flags.enableDebug = true;
-  if (options.enable_kati_warnings) flags.enableKatiWarnings = true;
-  if (options.enable_stat_logs) flags.enableStatLogs = true;
-  if (options.color_warnings) flags.colorWarnings = true;
-  if (options.no_builtin_rules) flags.noBuiltinRules = true;
-  if (options.syntax_check_only) flags.isSyntaxCheckOnly = true;
+  // Map parseArgs values to flags
+  if (values.file && typeof values.file === 'string') flags.makefile = values.file;
+  if (values.directory && typeof values.directory === 'string') flags.workingDir = values.directory;
+  if (values.jobs && typeof values.jobs === 'string') flags.numJobs = parseInt(values.jobs, 10);
+  if (values['dry-run']) flags.isDryRun = true;
+  if (values.silent) flags.isSilentMode = true;
+  if (values.ninja) flags.generateNinja = true;
+  if (values.regen) flags.regen = true;
+  if (values.regen_debug) flags.regenDebug = true;
+  if (values.gen_all_targets) flags.genAllTargets = true;
+  if (values.use_find_emulator) flags.useFindEmulator = true;
+  if (values.detect_android_echo) flags.detectAndroidEcho = true;
+  if (values.detect_depfiles) flags.detectDepfiles = true;
+  if (values.dump_kati_stamp) flags.dumpKatiStamp = true;
+  if (values.dump_include_graph && typeof values.dump_include_graph === 'string')
+    flags.dumpIncludeGraph = values.dump_include_graph;
+  if (values.enable_debug) flags.enableDebug = true;
+  if (values.enable_kati_warnings) flags.enableKatiWarnings = true;
+  if (values.enable_stat_logs) flags.enableStatLogs = true;
+  if (values.color_warnings) flags.colorWarnings = true;
+  if (values.no_builtin_rules) flags.noBuiltinRules = true;
+  if (values.syntax_check_only) flags.isSyntaxCheckOnly = true;
+  if (values.parse_only) flags.isParseOnly = true;
 
   flags.targets = targets;
   flags.numCpus = os.cpus().length;
