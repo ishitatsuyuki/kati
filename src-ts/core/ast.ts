@@ -2,6 +2,7 @@ import {Pattern, joinStrings, splitSpace} from '../utils/strutil';
 import {getFuncInfo} from './func';
 import {Evaluator, Loc} from './evaluator';
 import {SimpleVar, RecursiveVar, VarOrigin} from './var';
+import {Rule, Symbol, Intern} from './dep';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -318,17 +319,20 @@ class RuleStmt implements Stmt {
     const afterTargets = beforeTerm.substring(colonPos + 1);
 
     // Split targets by whitespace and check for pattern rules
-    const targets = targetsString
+    const targetStrings = targetsString
       .trim()
       .split(/\s+/)
       .filter(t => t.length > 0);
-    let isPatternRule = false;
-    let patternRuleCount = 0;
 
-    for (const target of targets) {
+    if (targetStrings.length === 0) {
+      ev.error('*** missing target.');
+    }
+
+    let isPatternRule = false;
+    for (const target of targetStrings) {
       if (target.includes('%')) {
-        patternRuleCount++;
         isPatternRule = true;
+        break;
       }
     }
 
@@ -340,63 +344,48 @@ class RuleStmt implements Stmt {
       remainingAfterTargets = remainingAfterTargets.substring(1);
     }
 
-    // Check for rule-specific variable assignment
-    const separatorMatch = remainingAfterTargets.match(/^([^=;]*?)([=;])/);
-    let separator = '';
-    let separatorPos = -1;
+    // Parse prerequisites and order-only inputs
+    let prereqString = remainingAfterTargets;
+    let orderOnlyInputs: string[] = [];
 
-    if (separatorMatch) {
-      separator = separatorMatch[2];
-      separatorPos = separatorMatch[1].length;
-    } else if (this.sep === RuleSep.EQ || this.sep === RuleSep.FINALEQ) {
-      separatorPos = remainingAfterTargets.length;
-      separator = '=';
+    // Handle order-only prerequisites (after |)
+    const pipePos = remainingAfterTargets.indexOf('|');
+    if (pipePos !== -1) {
+      prereqString = remainingAfterTargets.substring(0, pipePos);
+      const orderOnlyString = remainingAfterTargets.substring(pipePos + 1);
+      orderOnlyInputs = orderOnlyString
+        .trim()
+        .split(/\s+/)
+        .filter(p => p.length > 0);
     }
 
-    // Handle rule-specific variable assignment
-    if (separator === '=' && separatorPos > 0) {
-      // This would be handled by EvalRuleSpecificAssign in the C++ version
-      // For now, we'll skip the implementation details
-      console.log(
-        'Rule-specific variable assignment not fully implemented yet',
-      );
-      return;
-    }
+    const prerequisites = prereqString
+      .trim()
+      .split(/\s+/)
+      .filter(p => p.length > 0);
 
-    if (separatorPos === 0) {
-      ev.error('*** empty variable name.');
-    }
-
-    // Create a rule object (simplified version)
-    const rule = {
+    // Create Rule object
+    const rule: Rule = {
       loc: this.loc,
-      isDoubleColon,
-      isPatternRule,
-      targets,
-      prerequisites: [] as string[],
-      commands: [] as string[],
+      cmd_loc: () => this.loc,
+      cmd_lineno: null,
+      outputs: isPatternRule ? [] : targetStrings.map(t => Intern(t)),
+      inputs: prerequisites.map(p => Intern(p)),
+      order_only_inputs: orderOnlyInputs.map(p => Intern(p)),
+      output_patterns: isPatternRule ? targetStrings.map(t => Intern(t)) : [],
+      cmds: [],
+      is_double_colon: isDoubleColon,
+      is_suffix_rule: false, // Will be detected in DepBuilder
     };
-
-    // Parse prerequisites from the remaining string
-    if (separatorPos > 0) {
-      const prereqString = remainingAfterTargets
-        .substring(0, separatorPos)
-        .trim();
-      if (prereqString) {
-        rule.prerequisites = prereqString
-          .split(/\s+/)
-          .filter(p => p.length > 0);
-      }
-    }
 
     // Handle semicolon separator (inline command)
     if (this.sep === RuleSep.SEMICOLON && this.rhs) {
       const command = this.rhs.eval(ev);
-      rule.commands.push(command);
+      rule.cmds.push(command);
     }
 
-    console.log('Rule evaluated:', rule);
-    // In the full implementation, this rule would be added to the evaluator's rules list
+    // Add rule to evaluator
+    ev.addRule(rule);
   }
 
   debugString(): string {
@@ -521,14 +510,19 @@ class CommandStmt implements Stmt {
 
     const command = this.expr.eval(ev);
 
-    // In a full implementation, this would:
-    // 1. Add the command to the current rule's command list
-    // 2. Handle command prefixes (@, -, +)
-    // 3. Process shell escaping and variable expansion
-
-    // For now, we'll store it as a simple command
-    // This would integrate with the build system's command execution
-    console.log(`Command: ${command}`);
+    // Add command to the most recently added rule
+    const rules = ev.getRules();
+    if (rules.length > 0) {
+      const lastRule = rules[rules.length - 1];
+      lastRule.cmds.push(command);
+      
+      // Set command location if not already set
+      if (!lastRule.cmd_lineno) {
+        lastRule.cmd_lineno = this.loc.lineno;
+      }
+    } else {
+      ev.error('*** commands commence before first target.');
+    }
   }
 
   debugString(): string {

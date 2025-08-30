@@ -152,7 +152,9 @@ export class Pattern {
     if (!this.match(str)) {
       return '';
     }
-    return str.substring(this.percentIndex, str.length - this.pat.length + 1);
+    const prefixLen = this.percentIndex;
+    const suffixLen = this.pat.length - this.percentIndex - 1;
+    return str.substring(prefixLen, str.length - suffixLen);
   }
 
   appendSubst(str: string, subst: string): string {
@@ -169,10 +171,9 @@ export class Pattern {
       if (substPercentIndex === -1) {
         return subst;
       } else {
-        const stem = str.substring(
-          this.percentIndex,
-          str.length - this.pat.length + 1,
-        );
+        const prefixLen = this.percentIndex;
+        const suffixLen = this.pat.length - this.percentIndex - 1;
+        const stem = str.substring(prefixLen, str.length - suffixLen);
         return (
           subst.substring(0, substPercentIndex) +
           stem +
@@ -189,5 +190,11 @@ export class Pattern {
     }
     const s = trimSuffix(str, this.pat);
     return s + subst;
+  }
+
+  // Additional method for C++ compatibility with buffer output
+  appendSubstToBuffer(output: string, input: string, buf: string[]): void {
+    const result = this.appendSubst(output, input);
+    buf.push(result);
   }
 }

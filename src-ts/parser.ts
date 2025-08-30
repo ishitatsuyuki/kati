@@ -441,12 +441,35 @@ export class Parser {
           if (terms && terms.includes(' ')) {
             break;
           }
+          if (i > b) {
+            list.push(
+              new Literal(
+                Object.freeze({...loc}),
+                StrUtil.trimRightSpace(s.substring(b, i - b)),
+              ),
+            );
+          }
+          list.push(new Literal(Object.freeze({...loc}), ' '));
+          i += 2;
           if (n === '\r' && i + 2 < s.length && s[i + 2] === '\n') {
             i++;
           }
-          i++;
-          b = i + 1;
-          continue;
+          for (; i < s.length; i++) {
+            if (
+              s[i] == '\\' &&
+              i + 1 < s.length &&
+              (s[i + 1] == '\r' || s[i + 1] == '\n')
+            ) {
+              loc.lineno++;
+              i++;
+              continue;
+            }
+            if (s[i] != ' ' && s[i] != '\t') {
+              break;
+            }
+          }
+          b = i;
+          i--;
         }
       }
     }

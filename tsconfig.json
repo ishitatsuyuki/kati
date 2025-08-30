@@ -3,6 +3,7 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src-ts",
+    "target": "es2024"
   },
   "include": [
     "src-ts/**/*",

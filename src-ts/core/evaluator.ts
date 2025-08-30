@@ -2,9 +2,11 @@ import {KatiFlags} from '../cli/flags';
 import {Parser} from '../parser';
 import {Stmt, Value, Literal} from './ast';
 import {Vars, Var, SimpleVar, VarOrigin} from './var';
+import {Rule, DepNode, NamedDepNode, Symbol, Intern, makeDep, DepVars} from './dep';
 import * as fs from 'fs';
 
-export interface DepNode {
+// Legacy interface - replaced by dep.ts DepNode
+export interface LegacyDepNode {
   target: string;
   dependencies: string[];
   commands: string[];
@@ -42,7 +44,8 @@ export class Scope {
 export class Evaluator {
   private flags: KatiFlags;
   private variables: Vars = new Vars();
-  private rules: Map<string, DepNode> = new Map();
+  private rules: Rule[] = [];
+  private ruleVars: Map<Symbol, DepVars> = new Map();
   private _loc: Loc = {filename: '<unknown>', lineno: 0};
   private _eval_depth = 0;
 
@@ -112,34 +115,19 @@ export class Evaluator {
     }
   }
 
-  async buildDependencyGraph(targets: string[]): Promise<DepNode[]> {
+  async buildDependencyGraph(targets: string[]): Promise<NamedDepNode[]> {
     console.log(
-      `*kati*: [PLACEHOLDER] Building dependency graph for targets: ${targets.join(', ')}`,
+      `*kati*: Building dependency graph for targets: ${targets.join(', ')}`,
     );
 
-    const nodes: DepNode[] = [];
-    const targetsToProcess = targets.length > 0 ? targets : ['all'];
-
-    for (const target of targetsToProcess) {
-      const rule = this.rules.get(target);
-      if (rule) {
-        nodes.push(rule);
-      } else {
-        // Create a placeholder rule
-        const placeholderRule: DepNode = {
-          target,
-          dependencies: [],
-          commands: [`echo "No rule to make target '${target}'"`],
-          isPhony: false,
-        };
-        nodes.push(placeholderRule);
-      }
-    }
-
+    const symbolTargets = targets.map(t => Intern(t));
+    const nodes = makeDep(this.rules, this.ruleVars, symbolTargets);
+    
+    console.log(`*kati*: Built dependency graph with ${nodes.length} nodes`);
     return nodes;
   }
 
-  async generateNinja(nodes: DepNode[]): Promise<void> {
+  async generateNinja(nodes: NamedDepNode[]): Promise<void> {
     console.log(
       `*kati*: [PLACEHOLDER] Generating Ninja build file for ${nodes.length} targets`,
     );
@@ -155,10 +143,10 @@ export class Evaluator {
       '',
     ];
 
-    for (const node of nodes) {
-      ninjaContent.push(`build ${node.target}: PLACEHOLDER`);
-      ninjaContent.push(`  cmd = ${node.commands.join(' && ')}`);
-      ninjaContent.push(`  desc = Building ${node.target}`);
+    for (const {name, node} of nodes) {
+      ninjaContent.push(`build ${name.str()}: PLACEHOLDER`);
+      ninjaContent.push(`  cmd = ${node.cmds.join(' && ')}`);
+      ninjaContent.push(`  desc = Building ${name.str()}`);
       ninjaContent.push('');
     }
 
@@ -167,13 +155,13 @@ export class Evaluator {
     console.log('*kati*: [PLACEHOLDER] Wrote build.ninja');
   }
 
-  async execute(nodes: DepNode[]): Promise<number> {
+  async execute(nodes: NamedDepNode[]): Promise<number> {
     console.log(`*kati*: [PLACEHOLDER] Executing ${nodes.length} targets`);
 
     if (this.flags.isDryRun) {
       console.log('*kati*: [DRY RUN] Would execute:');
-      for (const node of nodes) {
-        for (const command of node.commands) {
+      for (const {name, node} of nodes) {
+        for (const command of node.cmds) {
           console.log(`[DRY RUN] ${command}`);
         }
       }
@@ -181,12 +169,12 @@ export class Evaluator {
     }
 
     // TODO: Implement actual command execution
-    for (const node of nodes) {
+    for (const {name, node} of nodes) {
       if (!this.flags.isSilentMode) {
-        console.log(`*kati*: Building target: ${node.target}`);
+        console.log(`*kati*: Building target: ${name.str()}`);
       }
 
-      for (const command of node.commands) {
+      for (const command of node.cmds) {
         if (!this.flags.isSilentMode) {
           console.log(command);
         }
@@ -275,5 +263,27 @@ export class Evaluator {
 
   decrementEvalDepth(): void {
     this._eval_depth--;
+  }
+
+  // Rule management methods
+  addRule(rule: Rule): void {
+    this.rules.push(rule);
+  }
+
+  setRuleVar(target: Symbol, name: Symbol, var_: Var): void {
+    let vars = this.ruleVars.get(target);
+    if (!vars) {
+      vars = new Map<Symbol, Var>();
+      this.ruleVars.set(target, vars);
+    }
+    vars.set(name, var_);
+  }
+
+  getRuleVars(target: Symbol): DepVars | null {
+    return this.ruleVars.get(target) || null;
+  }
+
+  getRules(): Rule[] {
+    return [...this.rules];
   }
 }
