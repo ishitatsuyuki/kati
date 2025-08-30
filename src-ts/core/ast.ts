@@ -1,6 +1,7 @@
 import { Pattern, joinStrings, splitSpace } from '../utils/strutil';
 import { getFuncInfo } from './func';
 import { Evaluator, Loc } from './evaluator';
+import { SimpleVar, RecursiveVar, VarOrigin } from './var';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -106,8 +107,9 @@ class SymRef extends Value {
     }
     
     eval(ev: Evaluator): string {
-        const value = ev.get(this.name);
-        return value ? value.eval(ev) : '';
+        const var_ = ev.getVar(this.name);
+        var_.used(ev, this.name);
+        return var_.eval(ev);
     }
     
     isFunc(_ev: Evaluator): boolean {
@@ -135,8 +137,9 @@ class VarRef extends Value {
     
     eval(ev: Evaluator): string {
         const name = this.nameExpr.eval(ev);
-        const value = ev.get(name);
-        return value ? value.eval(ev) : '';
+        const var_ = ev.getVar(name);
+        var_.used(ev, name);
+        return var_.eval(ev);
     }
     
     isFunc(_ev: Evaluator): boolean {
@@ -166,8 +169,9 @@ class VarSubst extends Value {
         const pat = this.pattern.eval(ev);
         const sub = this.subst.eval(ev);
         
-        const value = ev.get(name);
-        const varValue = value ? value.eval(ev) : '';
+        const var_ = ev.getVar(name);
+        var_.used(ev, name);
+        const varValue = var_.eval(ev);
         if (!varValue) {
             return '';
         }
@@ -394,33 +398,40 @@ class AssignStmt implements Stmt {
         ev.setLoc(this.loc);
         
         const name = this.getLhsSymbol(ev);
-        const value = this.rhs.eval(ev);
-        
-        // Get current value for append operations
-        const currentVar = ev.get(name);
-        const currentValue = currentVar ? currentVar.eval(ev) : '';
+        const currentVar = ev.getVar(name);
         
         switch (this.op) {
             case AssignOp.EQ:
-                // Recursively expanded variable - store the original Value, not evaluated string
-                ev.set(name, this.rhs);
+                // Recursively expanded variable - store as RecursiveVar
+                const recursiveVar = new RecursiveVar(this.rhs, VarOrigin.FILE, null, this.loc, this.orig_rhs);
+                ev.setVar(name, recursiveVar);
                 break;
                 
             case AssignOp.COLON_EQ:
-                // Simply expanded variable - store as literal
-                ev.set(name, new Literal(this.loc, value));
+                // Simply expanded variable - evaluate and store as SimpleVar
+                const value = this.rhs.eval(ev);
+                const simpleVar = new SimpleVar(value, VarOrigin.FILE, null, this.loc);
+                ev.setVar(name, simpleVar);
                 break;
                 
             case AssignOp.PLUS_EQ:
                 // Append to variable
-                const appendValue = currentValue ? currentValue + ' ' + value : value;
-                ev.set(name, new Literal(this.loc, appendValue));
+                if (currentVar.isDefined()) {
+                    currentVar.appendVar(ev, this.rhs);
+                } else {
+                    // Create new variable if it doesn't exist
+                    const newValue = this.rhs.eval(ev);
+                    const newVar = new SimpleVar(newValue, VarOrigin.FILE, null, this.loc);
+                    ev.setVar(name, newVar);
+                }
                 break;
                 
             case AssignOp.QUESTION_EQ:
                 // Set only if undefined
-                if (!currentValue) {
-                    ev.set(name, new Literal(this.loc, value));
+                if (!currentVar.isDefined()) {
+                    const conditionalValue = this.rhs.eval(ev);
+                    const conditionalVar = new SimpleVar(conditionalValue, VarOrigin.FILE, null, this.loc);
+                    ev.setVar(name, conditionalVar);
                 }
                 break;
         }
@@ -475,7 +486,8 @@ class IfStmt implements Stmt {
         ev.setLoc(this.loc);
         
         let condition = false;
-        const lhsValue = this.lhs.eval(ev).trim();
+        const varName = this.lhs.eval(ev).trim();
+        const lhsValue = ev.getVar(varName).string();
         
         switch (this.op) {
             case CondOp.IFDEF:
@@ -610,8 +622,8 @@ class ExportStmt implements Stmt {
         for (const varName of varNames) {
             if (this.is_export) {
                 // Export the variable to environment
-                const varValue = ev.get(varName);
-                const value = varValue ? varValue.eval(ev) : '';
+                const var_ = ev.getVar(varName);
+                const value = var_.eval(ev);
                 process.env[varName] = value;
                 console.log(`Exported ${varName}=${value}`);
             } else {

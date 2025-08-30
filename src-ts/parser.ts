@@ -1,5 +1,5 @@
 import { Stmt, AssignDirective, CommandStmt, ParseErrorStmt, RuleStmt, AssignStmt, RuleSep, AssignOp, ParseExprOpt, Expr, Value, Literal, ValueList, SymRef, VarRef, VarSubst, Func, IfStmt, CondOp, IncludeStmt, ExportStmt } from './core/ast';
-import { Loc } from './core/evaluator.js';
+import { Loc, MutableLoc } from './core/evaluator.js';
 import { StrUtil } from './utils/strutil';
 import { FuncInfo, getFuncInfo } from './core/func';
 
@@ -15,7 +15,7 @@ export class Parser {
     private buf: string;
     private stmts: Stmt[];
     private outStmts: Stmt[];
-    private loc: Loc;
+    private mutableLoc: MutableLoc;
     private l: number = 0;
     private fixedLineno: boolean = false;
     private currentDirective: AssignDirective = AssignDirective.NONE;
@@ -67,6 +67,10 @@ export class Parser {
         ...Array.from(this.makeDirectives.keys()).map(k => k.length)
     );
 
+    loc(): Loc {
+        return Object.freeze({ ...this.mutableLoc });
+    }
+
     constructor(buf: string, filename: string, stmts: Stmt[]);
     constructor(buf: string, loc: Loc, stmts: Stmt[]);
     constructor(buf: string, filenameOrLoc: string | Loc, stmts: Stmt[]) {
@@ -75,22 +79,20 @@ export class Parser {
         this.outStmts = stmts;
         
         if (typeof filenameOrLoc === 'string') {
-            this.loc = { filename: filenameOrLoc, lineno: 0 };
+            this.mutableLoc = { filename: filenameOrLoc, lineno: 0 };
             this.fixedLineno = false;
         } else {
-            this.loc = { ...filenameOrLoc };
+            this.mutableLoc = { ...filenameOrLoc };
             this.fixedLineno = true;
         }
     }
 
     parse(): void {
         for (this.l = 0; this.l < this.buf.length;) {
-            const result = this.findEndOfLine();
-            const e = result.pos;
-            const lfCnt = result.lfCount;
+            const { pos: e, lfCount: lfCnt } = this.findEndOfLine();
             
             if (!this.fixedLineno) {
-                this.loc.lineno++;
+                this.mutableLoc.lineno++;
             }
             
             let line = this.buf.substring(this.l, e);
@@ -102,7 +104,7 @@ export class Parser {
             this.parseLine(line);
             
             if (!this.fixedLineno) {
-                this.loc.lineno += lfCnt - 1;
+                this.mutableLoc.lineno += lfCnt - 1;
             }
             
             if (e === this.buf.length) {
@@ -188,8 +190,8 @@ export class Parser {
 
         if (line[0] === '\t' && this.afterRule) {
             const stmt = new CommandStmt(
-                this.loc,
-                this.parseExpr(this.loc, line.substring(1), ParseExprOpt.COMMAND),
+                this.loc(),
+                this.parseExpr({ ...this.mutableLoc }, line.substring(1), ParseExprOpt.COMMAND),
                 line
             );
             this.outStmts.push(stmt);
@@ -235,9 +237,9 @@ export class Parser {
         }
 
         const stmt = new AssignStmt(
-            { filename: this.loc.filename, lineno: this.defineStartLine },
-            this.parseExpr(this.loc, this.defineName),
-            this.parseExpr(this.loc, this.defineStart ? this.buf.substring(this.defineStart, this.l - 1) : '', ParseExprOpt.DEFINE),
+            { filename: this.loc().filename, lineno: this.defineStartLine },
+            this.parseExpr({ ...this.mutableLoc }, this.defineName),
+            this.parseExpr({ ...this.mutableLoc }, this.defineStart ? this.buf.substring(this.defineStart, this.l - 1) : '', ParseExprOpt.DEFINE),
             this.defineStart ? this.buf.substring(this.defineStart, this.l - 1) : '',
             AssignOp.EQ,
             this.currentDirective,
@@ -283,13 +285,13 @@ export class Parser {
         }
     }
 
-    private parseExpr(loc: Loc, s: string, opt: ParseExprOpt = ParseExprOpt.NORMAL): Expr {
+    private parseExpr(loc: MutableLoc, s: string, opt: ParseExprOpt = ParseExprOpt.NORMAL): Expr {
         return this.parseExprImpl(loc, s, null, opt).expr;
     }
 
-    private parseExprImpl(loc: Loc, s: string, terms: string[] | null, opt: ParseExprOpt = ParseExprOpt.NORMAL, trimRightSpace: boolean = false): { expr: Expr; index: number } {
-        const listLoc = { ...loc };
-        
+    private parseExprImpl(loc: MutableLoc, s: string, terms: string[] | null, opt: ParseExprOpt = ParseExprOpt.NORMAL, trimRightSpace: boolean = false): { expr: Expr; index: number } {
+        const listLoc = Object.freeze({ ...loc });
+
         // Remove carriage return if present
         if (s.endsWith('\r')) {
             s = s.slice(0, -1);
@@ -302,7 +304,7 @@ export class Parser {
         const list: Value[] = [];
 
         for (i = 0; i < s.length; i++) {
-            const itemLoc = { ...loc };
+            const itemLoc = Object.freeze({ ...loc });
             const c = s[i];
 
             // Check for termination characters
@@ -602,7 +604,7 @@ export class Parser {
         
         if (sep === -1) {
             // No separator found - just a target
-            lhs = this.parseExpr(this.loc, line);
+            lhs = this.parseExpr({ ...this.mutableLoc }, line);
             ruleSep = RuleSep.NULL;
             rhs = null;
         } else {
@@ -611,7 +613,7 @@ export class Parser {
             
             if (found !== -1) {
                 const foundPos = found + sep + 1;
-                lhs = this.parseExpr(this.loc, StrUtil.trimSpace(line.substring(0, foundPos)));
+                lhs = this.parseExpr({ ...this.mutableLoc }, StrUtil.trimSpace(line.substring(0, foundPos)));
                 
                 if (line[foundPos] === ';') {
                     ruleSep = RuleSep.SEMICOLON;
@@ -621,23 +623,23 @@ export class Parser {
                         line[foundPos + 1] === '$' && 
                         line[foundPos + 2] === '=') {
                         ruleSep = RuleSep.FINALEQ;
-                        rhs = this.parseExpr(this.loc, StrUtil.trimLeftSpace(line.substring(foundPos + 3)));
+                        rhs = this.parseExpr({ ...this.mutableLoc }, StrUtil.trimLeftSpace(line.substring(foundPos + 3)));
                     } else {
                         ruleSep = RuleSep.EQ;
-                        rhs = this.parseExpr(this.loc, StrUtil.trimLeftSpace(line.substring(foundPos + 1)));
+                        rhs = this.parseExpr({ ...this.mutableLoc }, StrUtil.trimLeftSpace(line.substring(foundPos + 1)));
                     }
                 } else {
                     ruleSep = RuleSep.NULL;
                     rhs = null;
                 }
             } else {
-                lhs = this.parseExpr(this.loc, line);
+                lhs = this.parseExpr({ ...this.mutableLoc }, line);
                 ruleSep = RuleSep.NULL;
                 rhs = null;
             }
         }
         
-        const ruleStmt = new RuleStmt(this.loc, lhs, ruleSep, rhs);
+        const ruleStmt = new RuleStmt(this.loc(), lhs, ruleSep, rhs);
         this.outStmts.push(ruleStmt);
         this.afterRule = true;
     }
@@ -687,9 +689,9 @@ export class Parser {
         }
 
         const stmt = new AssignStmt(
-            this.loc,
-            this.parseExpr(this.loc, lhs),
-            this.parseExpr(this.loc, rhs),
+            this.loc(),
+            this.parseExpr({ ...this.mutableLoc }, lhs),
+            this.parseExpr({ ...this.mutableLoc }, rhs),
             rhs,
             op,
             this.currentDirective,
@@ -705,7 +707,7 @@ export class Parser {
     }
 
     private error(msg: string): void {
-        const stmt = new ParseErrorStmt(this.loc, msg);
+        const stmt = new ParseErrorStmt(this.loc(), msg);
         this.outStmts.push(stmt);
     }
 
@@ -733,8 +735,8 @@ export class Parser {
 
     private createExport(line: string, isExport: boolean): void {
         const stmt = new ExportStmt(
-            this.loc,
-            this.parseExpr(this.loc, line),
+            this.loc(),
+            this.parseExpr({ ...this.mutableLoc }, line),
             isExport
         );
         this.outStmts.push(stmt);
@@ -744,8 +746,8 @@ export class Parser {
 
     private parseInclude(line: string, directive: string): void {
         const stmt = new IncludeStmt(
-            this.loc,
-            this.parseExpr(this.loc, line),
+            this.loc(),
+            this.parseExpr({ ...this.mutableLoc }, line),
             directive[0] === 'i' // 'include' vs '-include' or 'sinclude'
         );
         this.outStmts.push(stmt);
@@ -760,15 +762,15 @@ export class Parser {
         this.defineName = line;
         this.numDefineNest = 1;
         this.defineStart = 0;
-        this.defineStartLine = this.loc.lineno;
+        this.defineStartLine = this.loc().lineno;
         this.afterRule = false;
     }
 
     private parseIfdef(line: string, directive: string): void {
         const stmt = new IfStmt(
-            this.loc,
+            this.loc(),
             directive.startsWith('ifn') ? CondOp.IFNDEF : CondOp.IFDEF,
-            this.parseExpr(this.loc, line),
+            this.parseExpr({ ...this.mutableLoc }, line),
             null
         );
         this.outStmts.push(stmt);
@@ -777,9 +779,9 @@ export class Parser {
 
     private parseIfeq(line: string, directive: string): void {
         const stmt = new IfStmt(
-            this.loc,
+            this.loc(),
             directive.startsWith('ifneq') ? CondOp.IFNEQ : CondOp.IFEQ,
-            new Literal(this.loc, ''), // placeholder, will be set by parseIfEqCond
+            new Literal(this.loc(), ''), // placeholder, will be set by parseIfEqCond
             null
         );
 
@@ -882,8 +884,8 @@ export class Parser {
                 return false;
             }
             
-            stmt.lhs = this.parseExpr(this.loc, inner.substring(0, commaPos));
-            stmt.rhs = this.parseExpr(this.loc, StrUtil.trimLeftSpace(inner.substring(commaPos + 1)));
+            stmt.lhs = this.parseExpr({ ...this.mutableLoc }, inner.substring(0, commaPos));
+            stmt.rhs = this.parseExpr({ ...this.mutableLoc }, StrUtil.trimLeftSpace(inner.substring(commaPos + 1)));
             return true;
         } else {
             // Quoted form: "arg1" "arg2"
@@ -907,7 +909,7 @@ export class Parser {
                 }
                 
                 const content = trimmed.substring(1, end);
-                args.push(this.parseExpr(this.loc, content));
+                args.push(this.parseExpr({ ...this.mutableLoc }, content));
                 pos += s.length - trimmed.length + end + 1;
             }
             

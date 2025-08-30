@@ -4,6 +4,7 @@ import { splitSpace, Pattern, StrUtil } from '../utils/strutil';
 import { FileUtil } from '../utils/fileutil';
 import { Value } from './ast';
 import { Evaluator, Loc } from './evaluator';
+import { SimpleVar, VarOrigin } from './var';
 
 // Function signature type
 type FuncImpl = (args: Value[], ev: Evaluator) => string;
@@ -564,12 +565,12 @@ function callFunc(args: Value[], ev: Evaluator): string {
   // Use scoping mechanism to bind parameters $(0), $(1), $(2), etc.
   return ev.withScope((scope) => {
     // Set $(0) to the function name
-    scope.set('0', funcName);
+    scope.set('0', new SimpleVar(funcName, VarOrigin.FILE, null, { filename: '<scope>', lineno: 0 }));
     
     // Set $(1), $(2), etc. to the parameter values
     for (let i = 1; i < args.length; i++) {
       const paramValue = args[i].eval(ev);
-      scope.set(i.toString(), paramValue);
+      scope.set(i.toString(), new SimpleVar(paramValue, VarOrigin.FILE, null, { filename: '<scope>', lineno: 0 }));
     }
     
     // Evaluate the function body (which is already a parsed Value)
@@ -588,7 +589,7 @@ function foreachFunc(args: Value[], ev: Evaluator): string {
   for (const word of words) {
     // Use scoping mechanism to temporarily bind the loop variable
     const iterResult = ev.withScope((scope) => {
-      scope.set(varname, word);
+      scope.set(varname, new SimpleVar(word, VarOrigin.FILE, null, { filename: '<scope>', lineno: 0 }));
       return expr.eval(ev);
     });
     result.push(iterResult);

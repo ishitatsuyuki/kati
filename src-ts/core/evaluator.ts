@@ -1,6 +1,7 @@
 import { KatiFlags } from '../cli/flags';
 import { Parser } from '../parser';
 import { Stmt, Value, Literal } from './ast';
+import { Vars, Var, SimpleVar, VarOrigin } from './var';
 import * as fs from 'fs';
 
 export interface DepNode {
@@ -10,39 +11,37 @@ export interface DepNode {
   isPhony: boolean;
 }
 
-export interface Loc {
+export interface MutableLoc {
   filename: string;
   lineno: number;
 }
 
+export type Loc = Readonly<MutableLoc>;
+
 export class Scope {
-  private undoMap: [string, Value | undefined][] = [];
+  private undoMap: [string, Var][] = [];
 
   constructor(private ev: Evaluator) {}
 
-  get(name: string): Value | undefined {
-    return this.ev.get(name);
+  get(name: string): Var {
+    return this.ev.getVar(name);
   }
 
-  set(name: string, val: string) {
-    this.undoMap.push([name, this.ev.get(name)]);
-    this.ev.setVariable(name, new Literal({ filename: '<scope>', lineno: 0 }, val));
+  set(name: string, var_: Var) {
+    this.undoMap.push([name, this.ev.getVar(name)]);
+    this.ev.setVar(name, var_);
   }
 
   undo() {
-    this.undoMap.reverse().forEach(([name, val]) => {
-      if (val === undefined) {
-        console.warn("TODO: unset variable.");
-      } else {
-        this.ev.set(name, val);
-      }
+    this.undoMap.reverse().forEach(([name, var_]) => {
+      this.ev.setVar(name, var_);
     });
   }
 }
 
 export class Evaluator {
   private flags: KatiFlags;
-  private variables: Map<string, Value> = new Map();
+  private variables: Vars = new Vars();
   private rules: Map<string, DepNode> = new Map();
   private _loc: Loc = { filename: '<unknown>', lineno: 0 };
   private _eval_depth: number = 0;
@@ -54,22 +53,22 @@ export class Evaluator {
 
   private initializeBuiltinVariables(): void {
     // Initialize built-in variables similar to the C++ version
-    this.setLiteral('CC', process.env.CC || 'cc');
-    this.setLiteral('CXX', process.env.CXX || (process.platform === 'darwin' ? 'c++' : 'g++'));
-    this.setLiteral('AR', process.env.AR || 'ar');
-    this.setLiteral('MAKE_VERSION', '4.2.1');
-    this.setLiteral('KATI', 'tskati');
-    this.setLiteral('SHELL', '/bin/sh');
-    this.setLiteral('CURDIR', process.cwd());
+    this.setSimpleVar('CC', process.env.CC || 'cc', VarOrigin.DEFAULT);
+    this.setSimpleVar('CXX', process.env.CXX || (process.platform === 'darwin' ? 'c++' : 'g++'), VarOrigin.DEFAULT);
+    this.setSimpleVar('AR', process.env.AR || 'ar', VarOrigin.DEFAULT);
+    this.setSimpleVar('MAKE_VERSION', '4.2.1', VarOrigin.DEFAULT);
+    this.setSimpleVar('KATI', 'tskati', VarOrigin.DEFAULT);
+    this.setSimpleVar('SHELL', '/bin/sh', VarOrigin.DEFAULT);
+    this.setSimpleVar('CURDIR', process.cwd(), VarOrigin.DEFAULT);
     
     if (this.flags.targets.length > 0) {
-      this.setLiteral('MAKECMDGOALS', this.flags.targets.join(' '));
+      this.setSimpleVar('MAKECMDGOALS', this.flags.targets.join(' '), VarOrigin.DEFAULT);
     }
     
     // Copy environment variables
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined) {
-        this.setLiteral(key, value);
+        this.setSimpleVar(key, value, VarOrigin.ENVIRONMENT);
       }
     }
   }
@@ -188,32 +187,38 @@ export class Evaluator {
     return 0;
   }
 
-  getVariable(name: string): Value | undefined {
-    return this.variables.get(name);
+  getVar(name: string): Var {
+    return this.variables.lookup(name);
   }
 
-  setVariable(name: string, value: Value): void {
-    this.variables.set(name, value);
+  setVar(name: string, var_: Var): void {
+    this.variables.assign(name, var_);
   }
 
-  set(name: string, value: Value) {
-    this.variables.set(name, value);
+  setValue(name: string, value: Value, loc: Loc): void {
+    const var_ = new SimpleVar(value.eval(this), VarOrigin.FILE, null, loc);
+    this.variables.assign(name, var_);
   }
 
-  get(name: string): Value | undefined {
-    return this.variables.get(name);
+  set(name: string, value: Var) {
+    this.variables.assign(name, value);
   }
 
-  private setLiteral(name: string, value: string): void {
-    this.variables.set(name, new Literal({ filename: '<builtin>', lineno: 0 }, value));
+  get(name: string): Var {
+    return this.variables.lookup(name);
+  }
+
+  private setSimpleVar(name: string, value: string, origin: VarOrigin): void {
+    const var_ = new SimpleVar(value, origin, null, { filename: '<builtin>', lineno: 0 });
+    this.variables.assign(name, var_);
   }
 
   error(msg: string): never {
     throw new Error(msg);
   }
 
-  lookupVar(name: string): Value | undefined {
-    return this.variables.get(name);
+  lookupVar(name: string): Var {
+    return this.variables.lookup(name);
   }
 
   withScope<T>(fn: (scope: Scope) => T): T {
