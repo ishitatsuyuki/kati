@@ -1,6 +1,6 @@
 import * as fs from 'fs';
-import { KatiFlags } from './flags.js';
-import { Evaluator } from '../core/evaluator.js';
+import { KatiFlags } from './flags';
+import { Evaluator } from '../core/evaluator';
 
 export async function run(flags: KatiFlags): Promise<number> {
   const startTime = Date.now();

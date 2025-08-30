@@ -14,7 +14,12 @@
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["make", "build", "ninja", "cli"],
+  "keywords": [
+    "make",
+    "build",
+    "ninja",
+    "cli"
+  ],
   "author": "",
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.14.0",
@@ -23,6 +28,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.3",
+    "ts-node": "^10.9.2",
     "typescript": "^5.9.2"
   }
 }

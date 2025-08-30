@@ -1,6 +1,6 @@
-import { KatiFlags } from '../cli/flags.js';
-import { Parser } from '../parser.js';
-import { Stmt, Value, Literal } from './ast.js';
+import { KatiFlags } from '../cli/flags';
+import { Parser } from '../parser';
+import { Stmt, Value, Literal } from './ast';
 import * as fs from 'fs';
 
 export interface DepNode {

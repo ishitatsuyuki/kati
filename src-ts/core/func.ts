@@ -512,6 +512,7 @@ function orFunc(args: Value[], ev: Evaluator): string {
 function valueFunc(args: Value[], ev: Evaluator): string {
   const varName = args[0].eval(ev);
   const variable = ev.lookupVar(varName);
+  console.warn("value is not implemented")
   return variable ? variable.eval(ev) : '';
 }
 
