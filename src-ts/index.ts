@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { Command } from 'commander';
+import {Command} from 'commander';
 import * as fs from 'fs';
 import * as os from 'os';
-import { KatiFlags, createDefaultFlags } from './cli/flags';
-import { run } from './cli/main';
+import {KatiFlags, createDefaultFlags} from './cli/flags';
+import {run} from './cli/main';
 
 const program = new Command();
 
@@ -31,16 +31,24 @@ function findFirstMakefile(): string | undefined {
 
 function parseCommandLine(): KatiFlags {
   const flags = createDefaultFlags();
-  
+
   program
     .name('tskati')
     .description('TypeScript port of Kati (GNU make clone)')
     .version('1.0.0')
     .option('-f, --file <makefile>', 'Read makefile as the makefile')
-    .option('-C, --directory <dir>', 'Change to directory before doing anything')
-    .option('-j, --jobs <n>', 'Number of jobs to run simultaneously', (value) => parseInt(value, 10), 1)
-    .option('-n, --dry-run', 'Don\'t actually run any commands; just print them')
-    .option('-s, --silent', 'Don\'t print the commands as they are executed')
+    .option(
+      '-C, --directory <dir>',
+      'Change to directory before doing anything',
+    )
+    .option(
+      '-j, --jobs <n>',
+      'Number of jobs to run simultaneously',
+      value => parseInt(value, 10),
+      1,
+    )
+    .option('-n, --dry-run', "Don't actually run any commands; just print them")
+    .option('-s, --silent', "Don't print the commands as they are executed")
     .option('--ninja', 'Generate ninja build file')
     .option('--regen', 'Regenerate ninja file when needed')
     .option('--regen_debug', 'Debug ninja regeneration')
@@ -54,8 +62,8 @@ function parseCommandLine(): KatiFlags {
     .option('--enable_kati_warnings', 'Enable kati warnings')
     .option('--enable_stat_logs', 'Enable stat logs')
     .option('--color_warnings', 'Colorize warning output')
-    .option('--no_builtin_rules', 'Don\'t use built-in rules')
-    .option('--syntax_check_only', 'Only check syntax, don\'t execute')
+    .option('--no_builtin_rules', "Don't use built-in rules")
+    .option('--syntax_check_only', "Only check syntax, don't execute")
     .argument('[targets...]', 'Build targets')
     .allowUnknownOption()
     .parse();
@@ -89,7 +97,8 @@ function parseCommandLine(): KatiFlags {
   if (options.detect_android_echo) flags.detectAndroidEcho = true;
   if (options.detect_depfiles) flags.detectDepfiles = true;
   if (options.dump_kati_stamp) flags.dumpKatiStamp = true;
-  if (options.dump_include_graph) flags.dumpIncludeGraph = options.dump_include_graph;
+  if (options.dump_include_graph)
+    flags.dumpIncludeGraph = options.dump_include_graph;
   if (options.enable_debug) flags.enableDebug = true;
   if (options.enable_kati_warnings) flags.enableKatiWarnings = true;
   if (options.enable_stat_logs) flags.enableStatLogs = true;
@@ -136,5 +145,6 @@ async function main(): Promise<void> {
 }
 
 if (require.main === module) {
+  /* eslint-disable-next-line @typescript-eslint/no-floating-promises */
   main();
 }

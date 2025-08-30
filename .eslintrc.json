@@ -1,0 +1,6 @@
+{
+  "extends": "./node_modules/gts/",
+  "rules": {
+    "n/no-process-exit": "off"
+  }
+}

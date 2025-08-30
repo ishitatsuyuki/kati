@@ -23,7 +23,7 @@ export interface KatiFlags {
   noNinjaPrelude: boolean;
   useNinjaPhonyOutput: boolean;
   useNinjaValidations: boolean;
-  
+
   // Warning/error flags
   werrorFindEmulator: boolean;
   werrorOverridingCommands: boolean;
@@ -41,7 +41,7 @@ export interface KatiFlags {
   werrorRealNoCmdsOrDeps: boolean;
   warnRealNoCmds: boolean;
   werrorRealNoCmds: boolean;
-  
+
   // String options
   defaultPool?: string;
   ignoreDirtyPattern?: string;
@@ -51,12 +51,12 @@ export interface KatiFlags {
   ninjaDir?: string;
   ninjaSuffix?: string;
   workingDir?: string;
-  
+
   // Numeric options
   numCpus: number;
   numJobs: number;
   remoteNumJobs: number;
-  
+
   // Array options
   subkatiArgs: string[];
   targets: string[];
@@ -111,6 +111,6 @@ export function createDefaultFlags(): KatiFlags {
     targets: [],
     clVars: [],
     writable: [],
-    tracedVariablesPattern: []
+    tracedVariablesPattern: [],
   };
 }

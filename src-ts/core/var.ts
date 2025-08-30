@@ -1,5 +1,5 @@
-import { Evaluator, Loc } from './evaluator';
-import { Value, AssignOp, ValueList, Literal } from './ast';
+import {Evaluator, Loc} from './evaluator';
+import {Value, AssignOp, ValueList, Literal} from './ast';
 
 export type Symbol = string;
 export type SymbolSet = Set<string>;
@@ -12,7 +12,7 @@ export enum VarOrigin {
   FILE = 'FILE',
   COMMAND_LINE = 'COMMAND_LINE',
   OVERRIDE = 'OVERRIDE',
-  AUTOMATIC = 'AUTOMATIC'
+  AUTOMATIC = 'AUTOMATIC',
 }
 
 export function getOriginStr(origin: VarOrigin): string {
@@ -45,10 +45,10 @@ export abstract class Var {
   protected readonly origin_: VarOrigin;
   protected definition_: Frame | null;
   protected assign_op_: AssignOp = AssignOp.EQ;
-  protected readonly_: boolean = false;
-  protected deprecated_: boolean = false;
-  protected obsolete_: boolean = false;
-  protected self_referential_: boolean = false;
+  protected readonly_ = false;
+  protected deprecated_ = false;
+  protected obsolete_ = false;
+  protected self_referential_ = false;
   protected visibility_prefix_: string[] = [];
   protected loc_: Loc;
 
@@ -59,7 +59,7 @@ export abstract class Var {
   constructor(origin?: VarOrigin, definition?: Frame | null, loc?: Loc) {
     this.origin_ = origin || VarOrigin.UNDEFINED;
     this.definition_ = definition || null;
-    this.loc_ = loc || { filename: '<unknown>', lineno: 0 };
+    this.loc_ = loc || {filename: '<unknown>', lineno: 0};
   }
 
   abstract flavor(): string;
@@ -146,7 +146,7 @@ export abstract class Var {
     if (!valid) {
       const prefixesString = prefixes.join('\n');
       throw new Error(
-        `${loc.filename} is not a valid file to reference variable ${name}. Line #${loc.lineno}.\nValid file prefixes:\n${prefixesString}`
+        `${loc.filename} is not a valid file to reference variable ${name}. Line #${loc.lineno}.\nValid file prefixes:\n${prefixesString}`,
       );
     }
   }
@@ -159,7 +159,9 @@ export abstract class Var {
     if (this.obsolete_) {
       throw new Error(`*** ${sym} is obsolete${this.diagnosticMessageText()}.`);
     } else if (this.deprecated_) {
-      console.warn(`${sym} has been deprecated${this.diagnosticMessageText()}.`);
+      console.warn(
+        `${sym} has been deprecated${this.diagnosticMessageText()}.`,
+      );
     }
   }
 
@@ -194,7 +196,12 @@ export abstract class Var {
 }
 
 export class SimpleVar extends Var {
-  constructor(protected v_: string, origin: VarOrigin, definition: Frame | null, loc: Loc) {
+  constructor(
+    protected v_: string,
+    origin: VarOrigin,
+    definition: Frame | null,
+    loc: Loc,
+  ) {
     super(origin, definition, loc);
   }
 
@@ -217,7 +224,7 @@ export class SimpleVar extends Var {
   override appendVar(ev: Evaluator, v: Value): void {
     const buf = v.eval(ev);
     this.v_ += ' ' + buf;
-    this.definition_ = { filename: ev.loc().filename, lineno: ev.loc().lineno };
+    this.definition_ = {filename: ev.loc().filename, lineno: ev.loc().lineno};
   }
 
   string(): string {
@@ -233,7 +240,13 @@ export class RecursiveVar extends Var {
   protected v_: Value;
   protected orig_: string;
 
-  constructor(v: Value, origin: VarOrigin, definition: Frame | null, loc: Loc, orig: string) {
+  constructor(
+    v: Value,
+    origin: VarOrigin,
+    definition: Frame | null,
+    loc: Loc,
+    orig: string,
+  ) {
     super(origin, definition, loc);
     this.v_ = v;
     this.orig_ = orig;
@@ -258,13 +271,13 @@ export class RecursiveVar extends Var {
   override appendVar(ev: Evaluator, v: Value): void {
     this.v_ = new ValueList(v.loc, [this.v_, new Literal(v.loc, ' '), v]);
     // TODO: append orig_
-    this.definition_ = { filename: ev.loc().filename, lineno: ev.loc().lineno };
+    this.definition_ = {filename: ev.loc().filename, lineno: ev.loc().lineno};
   }
 
   override used(ev: Evaluator, sym: Symbol): void {
     if (this.selfReferential()) {
       throw new Error(
-        `*** Recursive variable "${sym}" references itself (eventually).`
+        `*** Recursive variable "${sym}" references itself (eventually).`,
       );
     }
     super.used(ev, sym);
@@ -355,15 +368,15 @@ export class VariableNamesVar extends Var {
   }
 
   private concatVariableNames(ev: Evaluator): string {
-    console.warn("TODO: implement VariableNamesVar")
+    console.warn('TODO: implement VariableNamesVar');
     return '';
   }
 }
 
 export class ShellStatusVar extends Var {
-  private static isSet_: boolean = false;
-  private static shellStatus_: number = 0;
-  private static shellStatusString_: string = '';
+  private static isSet_ = false;
+  private static shellStatus_ = 0;
+  private static shellStatusString_ = '';
 
   constructor() {
     super();
@@ -372,7 +385,10 @@ export class ShellStatusVar extends Var {
   }
 
   static setValue(newShellStatus: number): void {
-    if (!ShellStatusVar.isSet_ || ShellStatusVar.shellStatus_ !== newShellStatus) {
+    if (
+      !ShellStatusVar.isSet_ ||
+      ShellStatusVar.shellStatus_ !== newShellStatus
+    ) {
       ShellStatusVar.shellStatus_ = newShellStatus;
       ShellStatusVar.shellStatusString_ = newShellStatus.toString();
       ShellStatusVar.isSet_ = true;
@@ -416,15 +432,15 @@ export class Vars extends Map<Symbol, Var> {
     return this.get(name);
   }
 
-  assign(name: Symbol, v: Var): { readonly: boolean } {
+  assign(name: Symbol, v: Var): {readonly: boolean} {
     const existing = this.get(name);
     const readonly = existing ? existing.readOnly() : false;
-    
+
     if (!readonly) {
       this.set(name, v);
     }
-    
-    return { readonly };
+
+    return {readonly};
   }
 
   static addUsedEnvVars(v: Symbol): void {
