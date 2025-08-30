@@ -85,8 +85,9 @@ export class Parser {
 
     parse(): void {
         for (this.l = 0; this.l < this.buf.length;) {
-            let lfCnt = 0;
-            const e = this.findEndOfLine();
+            const result = this.findEndOfLine();
+            const e = result.pos;
+            const lfCnt = result.lfCount;
             
             if (!this.fixedLineno) {
                 this.loc.lineno++;
@@ -119,9 +120,54 @@ export class Parser {
         }
     }
 
-    private findEndOfLine(): number {
-        const newlinePos = this.buf.indexOf('\n', this.l);
-        return newlinePos === -1 ? this.buf.length : newlinePos;
+    private findEndOfLine(): { pos: number; lfCount: number } {
+        let e = this.l;
+        let lfCount = 0;
+        
+        while (e < this.buf.length) {
+            // Find next newline or backslash
+            const nextSpecial = this.buf.substring(e).search(/[\n\\]/);
+            if (nextSpecial === -1) {
+                // No more special characters, end of buffer
+                break;
+            }
+            
+            e += nextSpecial;
+            if (e >= this.buf.length) {
+                break;
+            }
+            
+            const c = this.buf[e];
+            if (c === '\\') {
+                if (e + 1 < this.buf.length) {
+                    const next = this.buf[e + 1];
+                    if (next === '\n') {
+                        // Escaped newline - skip both characters
+                        e += 2;
+                        lfCount++;
+                    } else if (next === '\r' && e + 2 < this.buf.length && this.buf[e + 2] === '\n') {
+                        // Escaped Windows newline - skip all three characters  
+                        e += 3;
+                        lfCount++;
+                    } else if (next === '\\') {
+                        // Double backslash - skip both but don't treat as line continuation
+                        e += 2;
+                    } else {
+                        // Single backslash with other character
+                        e++;
+                    }
+                } else {
+                    // Backslash at end of buffer
+                    e++;
+                }
+            } else if (c === '\n') {
+                // Unescaped newline - this is the end of line
+                lfCount++;
+                return { pos: e, lfCount };
+            }
+        }
+        
+        return { pos: e, lfCount };
     }
 
     private trimLeftSpace(line: string): string {
