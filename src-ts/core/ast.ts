@@ -248,7 +248,7 @@ class Func extends Value {
       throw new Error(`Unknown function: ${this.name}`);
     }
 
-    // Check argument count using C++ arity semantics
+    // Check argument count
     const nargs = this.args.length;
 
     if (nargs < funcInfo.minArity) {
@@ -301,7 +301,7 @@ class RuleStmt implements Stmt {
     // Evaluate the left-hand side (targets)
     const beforeTerm = this.lhs.eval(ev);
 
-    // Check for empty targets (see semicolon.mk comment in C++ code)
+    // Check for empty targets
     if (beforeTerm.match(/^\s*[;\s]*$/)) {
       if (this.sep === RuleSep.SEMICOLON) {
         ev.error('*** missing rule before commands.');

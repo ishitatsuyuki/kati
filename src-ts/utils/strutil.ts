@@ -192,7 +192,7 @@ export class Pattern {
     return s + subst;
   }
 
-  // Additional method for C++ compatibility with buffer output
+  // Additional method for buffer output
   appendSubstToBuffer(output: string, input: string, buf: string[]): void {
     const result = this.appendSubst(output, input);
     buf.push(result);

@@ -9,7 +9,7 @@ import {SimpleVar, VarOrigin} from './var';
 // Function signature type
 type FuncImpl = (args: Value[], ev: Evaluator) => string;
 
-// Function info structure matching C++ FuncInfo
+// Function info structure
 export interface FuncInfo {
   name: string;
   func: FuncImpl;
@@ -21,7 +21,7 @@ export interface FuncInfo {
   trimRightFirst: boolean;
 }
 
-// Helper function to strip shell comments (similar to C++ StripShellComment)
+// Helper function to strip shell comments
 function stripShellComment(cmd: string): string {
   if (!cmd.includes('#')) {
     return cmd;
@@ -76,7 +76,7 @@ function stripShellComment(cmd: string): string {
   return result;
 }
 
-// Helper function to get numeric value (similar to C++ GetNumericValueForFunc)
+// Helper function to get numeric value
 function getNumericValueForFunc(buf: string): number {
   const s = StrUtil.trimLeftSpace(buf);
   const n = parseInt(s, 10);
@@ -237,7 +237,7 @@ function sortFunc(args: Value[], ev: Evaluator): string {
   const list = args[0].eval(ev);
   const words = splitSpace(list);
 
-  // Sort and remove duplicates (stable sort like C++)
+  // Sort and remove duplicates
   words.sort();
   const result: string[] = [];
   let prev = '';
@@ -467,7 +467,7 @@ function realpathFunc(args: Value[], ev: Evaluator): string {
       const resolved = fs.realpathSync(tok);
       result.push(resolved);
     } catch (e) {
-      // Ignore errors, just like C++ version
+      // Ignore errors
     }
   }
 
@@ -564,7 +564,7 @@ function shellFunc(args: Value[], ev: Evaluator): string {
       `${shell} ${shellflag} "${cmd.replace(/"/g, '\\"')}"`,
       {encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe']},
     );
-    return result.replace(/\n$/, ''); // Remove trailing newline like C++ version
+    return result.replace(/\n$/, ''); // Remove trailing newline
   } catch (error: unknown) {
     return '';
   }
@@ -715,7 +715,7 @@ function fileFunc(args: Value[], ev: Evaluator): string {
       }
       return content;
     } catch (error) {
-      return ''; // File doesn't exist, return empty like C++ version
+      return ''; // File doesn't exist, return empty
     }
   } else if (filename[0] === '>') {
     // Write file
@@ -839,7 +839,7 @@ function varVisibilityFunc(args: Value[], ev: Evaluator): string {
   return '';
 }
 
-// Export the function registry (using C++ arity values from src/func.cc)
+// Export the function registry
 export const FUNC_INFO_MAP = new Map<string, FuncInfo>([
   // String manipulation functions
   [

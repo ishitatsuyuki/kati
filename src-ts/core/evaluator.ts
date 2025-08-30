@@ -55,7 +55,7 @@ export class Evaluator {
   }
 
   private initializeBuiltinVariables(): void {
-    // Initialize built-in variables similar to the C++ version
+    // Initialize built-in variables
     this.setSimpleVar('CC', process.env.CC || 'cc', VarOrigin.DEFAULT);
     this.setSimpleVar(
       'CXX',

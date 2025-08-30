@@ -384,7 +384,7 @@ class DepBuilder {
       }
     }
 
-    // Reverse suffix rules to match C++ behavior
+    // Reverse suffix rules
     for (const ruleList of this.suffix_rules_.values()) {
       ruleList.reverse();
     }
