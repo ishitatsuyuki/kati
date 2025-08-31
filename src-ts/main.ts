@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import {KatiFlags} from './flags';
-import {Evaluator} from '../core/evaluator';
-import {Parser} from '../parser';
-import {Stmt} from '../core/ast';
+import {Evaluator} from './evaluator';
+import {Parser} from './parser';
+import {Stmt} from './ast';
 
 function stmtToDebugString(stmt: Stmt): string {
   return stmt.debugString();

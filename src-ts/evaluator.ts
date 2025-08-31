@@ -1,5 +1,5 @@
-import {KatiFlags} from '../cli/flags';
-import {Parser} from '../parser';
+import {KatiFlags} from './flags';
+import {Parser} from './parser';
 import {Stmt} from './ast';
 import {SimpleVar, Var, VarOrigin, Vars} from './var';
 import {DepVars, makeDep, NamedDepNode, Rule, Symbol} from './dep';

@@ -5,8 +5,8 @@
 import {parseArgs} from 'node:util';
 import * as fs from 'fs';
 import * as os from 'os';
-import {createDefaultFlags, KatiFlags} from './cli/flags';
-import {run} from './cli/main';
+import {createDefaultFlags, KatiFlags} from './flags';
+import {run} from './main';
 
 function handleRealpath(args: string[]): void {
   for (const arg of args) {

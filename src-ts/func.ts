@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import {execSync} from 'child_process';
-import {Pattern, splitSpace, StrUtil} from '../utils/strutil';
-import {FileUtil} from '../utils/fileutil';
+import {Pattern, splitSpace, StrUtil} from './strutil';
+import {FileUtil} from './fileutil';
 import {Value} from './ast';
 import {Evaluator} from './evaluator';
 import {SimpleVar, VarOrigin} from './var';

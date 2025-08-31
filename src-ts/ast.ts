@@ -1,4 +1,4 @@
-import {joinStrings, Pattern, splitSpace} from '../utils/strutil';
+import {joinStrings, Pattern, splitSpace} from './strutil';
 import {getFuncInfo} from './func';
 import {Evaluator, Loc} from './evaluator';
 import {RecursiveVar, SimpleVar, VarOrigin} from './var';

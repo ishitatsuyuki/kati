@@ -20,10 +20,10 @@ import {
   ValueList,
   VarRef,
   VarSubst,
-} from './core/ast';
-import {Loc, MutableLoc} from './core/evaluator.js';
-import {StrUtil} from './utils/strutil';
-import {FuncInfo, getFuncInfo} from './core/func';
+} from './ast';
+import {Loc, MutableLoc} from './evaluator';
+import {StrUtil} from './strutil';
+import {FuncInfo, getFuncInfo} from './func';
 
 type DirectiveHandler = (line: string, directive: string) => void;
 

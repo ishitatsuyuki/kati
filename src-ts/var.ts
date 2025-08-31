@@ -1,8 +1,8 @@
 import {Evaluator, Loc} from './evaluator';
 import {AssignOp, Literal, Value, ValueList} from './ast';
 import {DepNode, Symbol as DepSymbol} from './dep';
-import {Pattern, splitSpace} from '../utils/strutil';
-import {FileUtil} from '../utils/fileutil';
+import {Pattern, splitSpace} from './strutil';
+import {FileUtil} from './fileutil';
 
 export type Symbol = string;
 export type SymbolSet = Set<string>;
