@@ -1,7 +1,7 @@
 import {Evaluator, Loc} from './evaluator';
-import {Value, AssignOp, ValueList, Literal} from './ast';
+import {AssignOp, Literal, Value, ValueList} from './ast';
 import {DepNode, Symbol as DepSymbol} from './dep';
-import {Pattern} from '../utils/strutil';
+import {Pattern, splitSpace} from '../utils/strutil';
 import {FileUtil} from '../utils/fileutil';
 
 export type Symbol = string;
@@ -495,8 +495,7 @@ export class CommandEvaluator {
 
     // Process each command value
     for (const cmdValue of node.cmds) {
-      const cmdStr = typeof cmdValue === 'string' ? cmdValue : cmdValue;
-      const lines = cmdStr.split('\n');
+      const lines = cmdValue.split('\n');
 
       for (const line of lines) {
         if (line.trim() === '') continue;
@@ -513,6 +512,8 @@ export class CommandEvaluator {
         results.push(command);
       }
     }
+
+    this.current_dep_node_ = null;
 
     return results;
   }
@@ -681,7 +682,7 @@ export class AutoSuffixDVar extends AutoVar {
   eval(ev: Evaluator): string {
     const buf = this.wrapped_.eval(ev);
     const results: string[] = [];
-    for (const token of buf.split(/\s+/).filter(t => t.length > 0)) {
+    for (const token of splitSpace(buf)) {
       results.push(FileUtil.dirname(token));
     }
     return results.join(' ');
@@ -699,7 +700,7 @@ export class AutoSuffixFVar extends AutoVar {
   eval(ev: Evaluator): string {
     const buf = this.wrapped_.eval(ev);
     const results: string[] = [];
-    for (const token of buf.split(/\s+/).filter(t => t.length > 0)) {
+    for (const token of splitSpace(buf)) {
       results.push(FileUtil.basename(token));
     }
     return results.join(' ');

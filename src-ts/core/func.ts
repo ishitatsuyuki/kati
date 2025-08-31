@@ -1,9 +1,9 @@
 import * as fs from 'fs';
 import {execSync} from 'child_process';
-import {splitSpace, Pattern, StrUtil} from '../utils/strutil';
+import {Pattern, splitSpace, StrUtil} from '../utils/strutil';
 import {FileUtil} from '../utils/fileutil';
 import {Value} from './ast';
-import {Evaluator, Loc} from './evaluator';
+import {Evaluator} from './evaluator';
 import {SimpleVar, VarOrigin} from './var';
 
 // Function signature type

@@ -1,8 +1,8 @@
 import {KatiFlags} from '../cli/flags';
 import {Parser} from '../parser';
-import {Stmt, Value} from './ast';
-import {CommandEvaluator, SimpleVar, Var, VarOrigin, Vars} from './var';
-import {DepNode, DepVars, makeDep, NamedDepNode, Rule, Symbol} from './dep';
+import {Stmt} from './ast';
+import {SimpleVar, Var, VarOrigin, Vars} from './var';
+import {DepVars, makeDep, NamedDepNode, Rule, Symbol} from './dep';
 import {exec} from './exec';
 import * as fs from 'fs';
 
@@ -15,7 +15,6 @@ export type Loc = Readonly<MutableLoc>;
 
 export class Scope {
   private undoMap: [string, Var][] = [];
-  private undoNode: {ce: CommandEvaluator; node: DepNode | null} | null = null;
 
   constructor(private ev: Evaluator) {}
 
@@ -28,15 +27,7 @@ export class Scope {
     this.ev.setVar(name, var_);
   }
 
-  setNode(ce: CommandEvaluator, node: DepNode) {
-    this.undoNode = {
-      ce,
-      node: ce.setCurrentDepNode(node),
-    };
-  }
-
   undo() {
-    this.undoNode?.ce?.setCurrentDepNode(this.undoNode.node);
     this.undoMap.reverse().forEach(([name, var_]) => {
       this.ev.setVar(name, var_);
     });

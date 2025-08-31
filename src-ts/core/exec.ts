@@ -1,8 +1,8 @@
 import * as fs from 'fs';
-import {spawn, spawnSync, SpawnOptions, SpawnSyncOptions} from 'child_process';
+import {spawn, SpawnOptions, spawnSync, SpawnSyncOptions} from 'child_process';
 import {DepNode, NamedDepNode, Symbol} from './dep';
-import {Evaluator, Loc} from './evaluator';
-import {CommandEvaluator, Command} from './var';
+import {Evaluator} from './evaluator';
+import {CommandEvaluator} from './var';
 
 // Constants matching C++ implementation
 const kNotExist = -2.0;
@@ -58,7 +58,6 @@ class Executor {
       n.rule_vars?.forEach((value, key) => {
         scope.set(key, value);
       });
-      scope.setNode(this.ce_, n);
 
       console.log(
         `ExecNode: ${n.output} for ${neededBy ? neededBy : '(null)'}`,

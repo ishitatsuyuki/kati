@@ -1,8 +1,8 @@
-import {Pattern, joinStrings, splitSpace} from '../utils/strutil';
+import {joinStrings, Pattern, splitSpace} from '../utils/strutil';
 import {getFuncInfo} from './func';
 import {Evaluator, Loc} from './evaluator';
-import {SimpleVar, RecursiveVar, VarOrigin} from './var';
-import {Rule, Symbol} from './dep';
+import {RecursiveVar, SimpleVar, VarOrigin} from './var';
+import {Rule} from './dep';
 import * as fs from 'fs';
 import * as path from 'path';
 
