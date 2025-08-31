@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+/* eslint-disable n/no-process-exit */
+
 import {parseArgs} from 'node:util';
 import * as fs from 'fs';
 import * as os from 'os';

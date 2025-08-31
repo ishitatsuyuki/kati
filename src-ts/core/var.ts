@@ -524,6 +524,12 @@ export class CommandEvaluator {
     return this.current_dep_node_;
   }
 
+  setCurrentDepNode(node: DepNode | null): DepNode | null {
+    const ret = this.current_dep_node_;
+    this.current_dep_node_ = node;
+    return ret;
+  }
+
   evaluator(): Evaluator {
     return this.ev_;
   }

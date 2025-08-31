@@ -456,15 +456,15 @@ export class Parser {
           }
           for (; i < s.length; i++) {
             if (
-              s[i] == '\\' &&
+              s[i] === '\\' &&
               i + 1 < s.length &&
-              (s[i + 1] == '\r' || s[i + 1] == '\n')
+              (s[i + 1] === '\r' || s[i + 1] === '\n')
             ) {
               loc.lineno++;
               i++;
               continue;
             }
-            if (s[i] != ' ' && s[i] != '\t') {
+            if (s[i] !== ' ' && s[i] !== '\t') {
               break;
             }
           }

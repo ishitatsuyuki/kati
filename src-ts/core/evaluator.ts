@@ -1,8 +1,8 @@
 import {KatiFlags} from '../cli/flags';
 import {Parser} from '../parser';
 import {Stmt, Value} from './ast';
-import {SimpleVar, Var, VarOrigin, Vars} from './var';
-import {DepVars, makeDep, NamedDepNode, Rule, Symbol} from './dep';
+import {CommandEvaluator, SimpleVar, Var, VarOrigin, Vars} from './var';
+import {DepNode, DepVars, makeDep, NamedDepNode, Rule, Symbol} from './dep';
 import {exec} from './exec';
 import * as fs from 'fs';
 
@@ -15,6 +15,7 @@ export type Loc = Readonly<MutableLoc>;
 
 export class Scope {
   private undoMap: [string, Var][] = [];
+  private undoNode: {ce: CommandEvaluator; node: DepNode | null} | null = null;
 
   constructor(private ev: Evaluator) {}
 
@@ -27,7 +28,15 @@ export class Scope {
     this.ev.setVar(name, var_);
   }
 
+  setNode(ce: CommandEvaluator, node: DepNode) {
+    this.undoNode = {
+      ce,
+      node: ce.setCurrentDepNode(node),
+    };
+  }
+
   undo() {
+    this.undoNode?.ce?.setCurrentDepNode(this.undoNode.node);
     this.undoMap.reverse().forEach(([name, var_]) => {
       this.ev.setVar(name, var_);
     });
@@ -142,7 +151,6 @@ export class Evaluator {
       ninjaContent.push('');
     }
 
-    const fs = await import('fs');
     await fs.promises.writeFile('build.ninja', ninjaContent.join('\n'));
     console.log('*kati*: [PLACEHOLDER] Wrote build.ninja');
   }
@@ -151,7 +159,7 @@ export class Evaluator {
     console.log(`*kati*: Executing ${nodes.length} targets`);
 
     try {
-      await exec(nodes, this);
+      exec(nodes, this);
       return 0;
     } catch (error) {
       console.error(`*kati*: Execution failed: ${error}`);
@@ -165,19 +173,6 @@ export class Evaluator {
 
   setVar(name: string, var_: Var): void {
     this.variables.assign(name, var_);
-  }
-
-  setValue(name: string, value: Value, loc: Loc): void {
-    const var_ = new SimpleVar(value.eval(this), VarOrigin.FILE, null, loc);
-    this.variables.assign(name, var_);
-  }
-
-  set(name: string, value: Var) {
-    this.variables.assign(name, value);
-  }
-
-  get(name: string): Var {
-    return this.variables.lookup(name);
   }
 
   private setSimpleVar(name: string, value: string, origin: VarOrigin): void {

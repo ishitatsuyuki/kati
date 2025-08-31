@@ -33,8 +33,7 @@ function parseAndDumpDebugString(filename: string): void {
       console.log('');
     });
   } catch (error) {
-    console.error(`Error parsing ${filename}:`, error);
-    process.exit(1);
+    throw new Error(`Error parsing ${filename}: ${error}`);
   }
 }
 

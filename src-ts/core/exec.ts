@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import {spawn, SpawnOptions} from 'child_process';
+import {spawn, spawnSync, SpawnOptions, SpawnSyncOptions} from 'child_process';
 import {DepNode, NamedDepNode, Symbol} from './dep';
 import {Evaluator, Loc} from './evaluator';
 import {CommandEvaluator, Command} from './var';
@@ -23,7 +23,7 @@ class Executor {
   private done_: Map<Symbol, number> = new Map();
   private shell_: string;
   private shellflag_: string;
-  private num_commands_: number = 0;
+  private num_commands_ = 0;
 
   constructor(ev: Evaluator) {
     this.ce_ = new CommandEvaluator(ev);
@@ -54,81 +54,87 @@ class Executor {
 
     const outputTs = this.getTimestamp(n.output);
 
-    this.ce_.evaluator().withScope(scope => {
+    return this.ce_.evaluator().withScope(scope => {
+      n.rule_vars?.forEach((value, key) => {
+        scope.set(key, value);
+      });
+      scope.setNode(this.ce_, n);
 
-    console.log(`ExecNode: ${n.output} for ${neededBy ? neededBy : '(null)'}`);
+      console.log(
+        `ExecNode: ${n.output} for ${neededBy ? neededBy : '(null)'}`,
+      );
 
-    // Check if target exists and has no rule
-    if (!n.has_rule && outputTs === kNotExist && !n.is_phony) {
-      if (neededBy) {
-        throw new Error(
-          `*** No rule to make target '${n.output}', needed by '${neededBy}'.`,
-        );
-      } else {
-        throw new Error(`*** No rule to make target '${n.output}'.`);
-      }
-    }
-
-    // Process order-only dependencies first
-    let latest = kProcessing;
-    for (const d of n.order_onlys) {
-      if (fs.existsSync(d.node.output)) {
-        continue;
-      }
-      const ts = this.execNode(d.node, n.output);
-      if (latest < ts) {
-        latest = ts;
-      }
-    }
-
-    // Process regular dependencies
-    for (const d of n.deps) {
-      const ts = this.execNode(d.node, n.output);
-      if (latest < ts) {
-        latest = ts;
-      }
-    }
-
-    // Check if rebuild is needed
-    if (outputTs >= latest && !n.is_phony) {
-      this.done_.set(n.output, outputTs);
-      return outputTs;
-    }
-
-    // Execute commands for this target
-    const commands = this.ce_.eval(n);
-    for (const command of commands) {
-      this.num_commands_++;
-
-      if (command.echo) {
-        console.log(command.cmd);
+      // Check if target exists and has no rule
+      if (!n.has_rule && outputTs === kNotExist && !n.is_phony) {
+        if (neededBy) {
+          throw new Error(
+            `*** No rule to make target '${n.output}', needed by '${neededBy}'.`,
+          );
+        } else {
+          throw new Error(`*** No rule to make target '${n.output}'.`);
+        }
       }
 
-      if (!this.ce_.evaluator().avoid_io()) {
-        const result = await this.runCommand(
-          this.shell_,
-          this.shellflag_,
-          command.cmd,
-        );
+      // Process order-only dependencies first
+      let latest = kProcessing;
+      for (const d of n.order_onlys) {
+        if (fs.existsSync(d.node.output)) {
+          continue;
+        }
+        const ts = this.execNode(d.node, n.output);
+        if (latest < ts) {
+          latest = ts;
+        }
+      }
 
-        process.stdout.write(result.stdout);
+      // Process regular dependencies
+      for (const d of n.deps) {
+        const ts = this.execNode(d.node, n.output);
+        if (latest < ts) {
+          latest = ts;
+        }
+      }
 
-        if (result.exitCode !== 0) {
-          if (command.ignore_error) {
-            console.error(
-              `[${command.output}] Error ${result.exitCode} (ignored)`,
-            );
-          } else {
-            console.error(`*** [${command.output}] Error ${result.exitCode}`);
-            process.exit(1);
+      // Check if rebuild is needed
+      if (outputTs >= latest && !n.is_phony) {
+        this.done_.set(n.output, outputTs);
+        return outputTs;
+      }
+
+      // Execute commands for this target
+      const commands = this.ce_.eval(n);
+      for (const command of commands) {
+        this.num_commands_++;
+
+        if (command.echo) {
+          console.log(command.cmd);
+        }
+
+        if (!this.ce_.evaluator().avoid_io()) {
+          const result = this.runCommandSync(
+            this.shell_,
+            this.shellflag_,
+            command.cmd,
+          );
+
+          process.stdout.write(result.stdout);
+
+          if (result.exitCode !== 0) {
+            if (command.ignore_error) {
+              console.error(
+                `[${command.output}] Error ${result.exitCode} (ignored)`,
+              );
+            } else {
+              throw new Error(
+                `*** [${command.output}] Error ${result.exitCode}`,
+              );
+            }
           }
         }
       }
-    }
-    })
-
-    this.done_.set(n.output, outputTs);
-    return outputTs;
+      this.done_.set(n.output, outputTs);
+      return outputTs;
+    });
   }
 
   /**
@@ -218,6 +224,33 @@ class Executor {
       });
     });
   }
+
+  /**
+   * Run a shell command synchronously
+   * @param shell Shell executable
+   * @param shellFlag Shell flag (usually -c)
+   * @param command Command to execute
+   * @returns Command execution result
+   */
+  private runCommandSync(
+    shell: string,
+    shellFlag: string,
+    command: string,
+  ): CommandResult {
+    const options: SpawnSyncOptions = {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
+      encoding: 'utf8',
+    };
+
+    const result = spawnSync(shell, [shellFlag, command], options);
+
+    return {
+      exitCode: result.status || 0,
+      stdout: result.stdout?.toString() || '',
+      stderr: result.stderr?.toString() || '',
+    };
+  }
 }
 
 /**
@@ -225,14 +258,11 @@ class Executor {
  * @param roots Root targets to execute
  * @param ev Evaluator instance
  */
-export async function exec(
-  roots: NamedDepNode[],
-  ev: Evaluator,
-): Promise<void> {
+export function exec(roots: NamedDepNode[], ev: Evaluator) {
   const executor = new Executor(ev);
 
   for (const root of roots) {
-    await executor.execNode(root.node, null);
+    executor.execNode(root.node, null);
   }
 
   if (executor.count() === 0) {
