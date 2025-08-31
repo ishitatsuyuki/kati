@@ -116,9 +116,12 @@ Arguments:
   }
 
   // Map parseArgs values to flags
-  if (values.file && typeof values.file === 'string') flags.makefile = values.file;
-  if (values.directory && typeof values.directory === 'string') flags.workingDir = values.directory;
-  if (values.jobs && typeof values.jobs === 'string') flags.numJobs = parseInt(values.jobs, 10);
+  if (values.file && typeof values.file === 'string')
+    flags.makefile = values.file;
+  if (values.directory && typeof values.directory === 'string')
+    flags.workingDir = values.directory;
+  if (values.jobs && typeof values.jobs === 'string')
+    flags.numJobs = parseInt(values.jobs, 10);
   if (values['dry-run']) flags.isDryRun = true;
   if (values.silent) flags.isSilentMode = true;
   if (values.ninja) flags.generateNinja = true;
@@ -129,7 +132,10 @@ Arguments:
   if (values.detect_android_echo) flags.detectAndroidEcho = true;
   if (values.detect_depfiles) flags.detectDepfiles = true;
   if (values.dump_kati_stamp) flags.dumpKatiStamp = true;
-  if (values.dump_include_graph && typeof values.dump_include_graph === 'string')
+  if (
+    values.dump_include_graph &&
+    typeof values.dump_include_graph === 'string'
+  )
     flags.dumpIncludeGraph = values.dump_include_graph;
   if (values.enable_debug) flags.enableDebug = true;
   if (values.enable_kati_warnings) flags.enableKatiWarnings = true;

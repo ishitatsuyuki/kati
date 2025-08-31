@@ -115,7 +115,7 @@ export class Evaluator {
 
     const symbolTargets = targets;
     const nodes = makeDep(this.rules, this.ruleVars, symbolTargets);
-    
+
     console.log(`*kati*: Built dependency graph with ${nodes.length} nodes`);
     return nodes;
   }

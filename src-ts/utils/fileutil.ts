@@ -66,4 +66,13 @@ export class FileUtil {
   static extname(filePath: string): string {
     return path.extname(filePath);
   }
+
+  static async getTimestamp(filePath: string): Promise<number> {
+    try {
+      const stat = await fs.promises.stat(filePath);
+      return stat.mtime.getTime() / 1000;
+    } catch {
+      return -1;
+    }
+  }
 }

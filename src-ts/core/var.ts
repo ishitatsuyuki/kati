@@ -1,5 +1,8 @@
 import {Evaluator, Loc} from './evaluator';
 import {Value, AssignOp, ValueList, Literal} from './ast';
+import {DepNode, Symbol as DepSymbol} from './dep';
+import {Pattern} from '../utils/strutil';
+import {FileUtil} from '../utils/fileutil';
 
 export type Symbol = string;
 export type SymbolSet = Set<string>;
@@ -417,6 +420,283 @@ export class ShellStatusVar extends Var {
 
   debugString(): string {
     return `*ShellStatusVar(${ShellStatusVar.shellStatus_})*`;
+  }
+}
+
+export interface Command {
+  output: DepSymbol;
+  cmd: string;
+  echo: boolean;
+  ignore_error: boolean;
+  force_no_subshell?: boolean;
+}
+
+export function parseCommandPrefixes(s: string): {
+  cmd: string;
+  echo: boolean;
+  ignore_error: boolean;
+} {
+  let cmd = s.trimStart();
+  let echo = true;
+  let ignore_error = false;
+
+  while (cmd.length > 0) {
+    const c = cmd[0];
+    if (c === '@') {
+      echo = false;
+    } else if (c === '-') {
+      ignore_error = true;
+    } else if (c === '+') {
+      // ignore recursion marker
+    } else {
+      break;
+    }
+    cmd = cmd.substring(1).trimStart();
+  }
+
+  return {cmd, echo, ignore_error};
+}
+
+export class CommandEvaluator {
+  private ev_: Evaluator;
+  private current_dep_node_: DepNode | null = null;
+  private found_new_inputs_ = false;
+
+  constructor(ev: Evaluator) {
+    this.ev_ = ev;
+    this.registerAutoVars();
+  }
+
+  private registerAutoVars(): void {
+    const insertAutoVar = (
+      name: string,
+      varClass: new (ce: CommandEvaluator, sym: string) => AutoVar,
+    ) => {
+      const v = new varClass(this, name);
+      this.ev_.setVar(name, v);
+      this.ev_.setVar(name + 'D', new AutoSuffixDVar(this, name + 'D', v));
+      this.ev_.setVar(name + 'F', new AutoSuffixFVar(this, name + 'F', v));
+    };
+
+    insertAutoVar('@', AutoAtVar);
+    insertAutoVar('<', AutoLessVar);
+    insertAutoVar('^', AutoHatVar);
+    insertAutoVar('+', AutoPlusVar);
+    insertAutoVar('*', AutoStarVar);
+    insertAutoVar('?', AutoQuestionVar);
+    insertAutoVar('%', AutoNotImplementedVar);
+    insertAutoVar('|', AutoNotImplementedVar);
+  }
+
+  eval(node: DepNode): Command[] {
+    const results: Command[] = [];
+    this.current_dep_node_ = node;
+    this.found_new_inputs_ = false;
+
+    // Process each command value
+    for (const cmdValue of node.cmds) {
+      const cmdStr = typeof cmdValue === 'string' ? cmdValue : cmdValue;
+      const lines = cmdStr.split('\n');
+
+      for (const line of lines) {
+        if (line.trim() === '') continue;
+
+        const {cmd, echo, ignore_error} = parseCommandPrefixes(line);
+        if (cmd.length === 0) continue;
+
+        const command: Command = {
+          output: node.output,
+          cmd,
+          echo,
+          ignore_error,
+        };
+        results.push(command);
+      }
+    }
+
+    return results;
+  }
+
+  currentDepNode(): DepNode {
+    if (!this.current_dep_node_) {
+      throw new Error('No current dependency node');
+    }
+    return this.current_dep_node_;
+  }
+
+  evaluator(): Evaluator {
+    return this.ev_;
+  }
+
+  foundNewInputs(): boolean {
+    return this.found_new_inputs_;
+  }
+
+  setFoundNewInputs(val: boolean): void {
+    this.found_new_inputs_ = val;
+  }
+}
+
+export abstract class AutoVar extends Var {
+  protected ce_: CommandEvaluator;
+  protected sym_: string;
+
+  constructor(ce: CommandEvaluator, sym: string) {
+    super(VarOrigin.AUTOMATIC, null, {filename: '<automatic>', lineno: 0});
+    this.ce_ = ce;
+    this.sym_ = sym;
+  }
+
+  flavor(): string {
+    return 'undefined';
+  }
+
+  isDefined(): boolean {
+    return true;
+  }
+
+  override appendVar(_ev: Evaluator, _v: Value): void {
+    throw new Error('Cannot append to automatic variable');
+  }
+
+  string(): string {
+    throw new Error(`$(value ${this.sym_}) is not implemented yet`);
+  }
+
+  debugString(): string {
+    return `AutoVar(${this.sym_})`;
+  }
+
+  isFunc(_ev: Evaluator): boolean {
+    return true;
+  }
+
+  abstract eval(ev: Evaluator): string;
+}
+
+export class AutoAtVar extends AutoVar {
+  eval(_ev: Evaluator): string {
+    return this.ce_.currentDepNode().output;
+  }
+}
+
+export class AutoLessVar extends AutoVar {
+  eval(_ev: Evaluator): string {
+    const actualInputs = this.ce_.currentDepNode().actual_inputs;
+    return actualInputs.length > 0 ? actualInputs[0] : '';
+  }
+}
+
+export class AutoHatVar extends AutoVar {
+  eval(_ev: Evaluator): string {
+    const seen = new Set<string>();
+    const results: string[] = [];
+    for (const input of this.ce_.currentDepNode().actual_inputs) {
+      if (!seen.has(input)) {
+        seen.add(input);
+        results.push(input);
+      }
+    }
+    return results.join(' ');
+  }
+}
+
+export class AutoPlusVar extends AutoVar {
+  eval(_ev: Evaluator): string {
+    return this.ce_.currentDepNode().actual_inputs.join(' ');
+  }
+}
+
+export class AutoStarVar extends AutoVar {
+  eval(_ev: Evaluator): string {
+    const node = this.ce_.currentDepNode();
+    if (!node.output_pattern) {
+      return '';
+    }
+    const pat = new Pattern(node.output_pattern);
+    return pat.stem(node.output);
+  }
+}
+
+export class AutoQuestionVar extends AutoVar {
+  eval(ev: Evaluator): string {
+    const seen = new Set<string>();
+    const results: string[] = [];
+
+    if (ev.avoid_io()) {
+      results.push('${KATI_NEW_INPUTS}');
+      if (!this.ce_.foundNewInputs()) {
+        const commands: string[] = ['KATI_NEW_INPUTS=$(find'];
+        for (const input of this.ce_.currentDepNode().actual_inputs) {
+          if (!seen.has(input)) {
+            seen.add(input);
+            commands.push(input);
+          }
+        }
+        commands.push(
+          '$(test -e',
+          this.ce_.currentDepNode().output,
+          '&& echo -newer',
+          this.ce_.currentDepNode().output,
+          ')) && export KATI_NEW_INPUTS',
+        );
+        // TODO: Need to add delayed output commands support to Evaluator
+        // ev.addDelayedOutputCommand(commands.join(' '));
+        this.ce_.setFoundNewInputs(true);
+      }
+    } else {
+      // For now, return all inputs since we can't easily do async timestamp checking in eval
+      // This is a simplification - the real implementation would need async support
+      for (const input of this.ce_.currentDepNode().actual_inputs) {
+        if (!seen.has(input)) {
+          seen.add(input);
+          results.push(input);
+        }
+      }
+    }
+    return results.join(' ');
+  }
+}
+
+export class AutoNotImplementedVar extends AutoVar {
+  eval(ev: Evaluator): never {
+    ev.error(`Automatic variable \`$${this.sym_}\` isn't supported yet`);
+  }
+}
+
+export class AutoSuffixDVar extends AutoVar {
+  private wrapped_: Var;
+
+  constructor(ce: CommandEvaluator, sym: string, wrapped: Var) {
+    super(ce, sym);
+    this.wrapped_ = wrapped;
+  }
+
+  eval(ev: Evaluator): string {
+    const buf = this.wrapped_.eval(ev);
+    const results: string[] = [];
+    for (const token of buf.split(/\s+/).filter(t => t.length > 0)) {
+      results.push(FileUtil.dirname(token));
+    }
+    return results.join(' ');
+  }
+}
+
+export class AutoSuffixFVar extends AutoVar {
+  private wrapped_: Var;
+
+  constructor(ce: CommandEvaluator, sym: string, wrapped: Var) {
+    super(ce, sym);
+    this.wrapped_ = wrapped;
+  }
+
+  eval(ev: Evaluator): string {
+    const buf = this.wrapped_.eval(ev);
+    const results: string[] = [];
+    for (const token of buf.split(/\s+/).filter(t => t.length > 0)) {
+      results.push(FileUtil.basename(token));
+    }
+    return results.join(' ');
   }
 }
 

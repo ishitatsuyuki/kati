@@ -369,10 +369,10 @@ class RuleStmt implements Stmt {
       loc: this.loc,
       cmd_loc: () => this.loc,
       cmd_lineno: null,
-      outputs: isPatternRule ? [] : targetStrings.map(t => (t)),
-      inputs: prerequisites.map(p => (p)),
-      order_only_inputs: orderOnlyInputs.map(p => (p)),
-      output_patterns: isPatternRule ? targetStrings.map(t => (t)) : [],
+      outputs: isPatternRule ? [] : targetStrings.map(t => t),
+      inputs: prerequisites.map(p => p),
+      order_only_inputs: orderOnlyInputs.map(p => p),
+      output_patterns: isPatternRule ? targetStrings.map(t => t) : [],
       cmds: [],
       is_double_colon: isDoubleColon,
       is_suffix_rule: false, // Will be detected in DepBuilder
@@ -516,7 +516,7 @@ class CommandStmt implements Stmt {
     if (rules.length > 0) {
       const lastRule = rules[rules.length - 1];
       lastRule.cmds.push(command);
-      
+
       // Set command location if not already set
       if (!lastRule.cmd_lineno) {
         lastRule.cmd_lineno = this.loc.lineno;

@@ -163,12 +163,12 @@ function isSuffixRule(output: Symbol): boolean {
 
   const rest = str.substring(1);
   const dotIndex = rest.indexOf('.');
-  
+
   // If there is no dot or multiple dots, this is not a suffix rule
   if (dotIndex === -1 || rest.substring(dotIndex + 1).indexOf('.') !== -1) {
     return false;
   }
-  
+
   return true;
 }
 
@@ -197,7 +197,9 @@ class RuleMerger {
 
   setImplicitOutput(output: Symbol, p: Symbol, merger: RuleMerger): void {
     if (!merger.primary_rule) {
-      throw new Error(`*** implicit output \`${output}' on phony target \`${p}'`);
+      throw new Error(
+        `*** implicit output \`${output}' on phony target \`${p}'`,
+      );
     }
     if (this.parent) {
       throw new Error(
@@ -215,7 +217,9 @@ class RuleMerger {
     if (this.rules.length === 0) {
       this.is_double_colon = rule.is_double_colon;
     } else if (this.is_double_colon !== rule.is_double_colon) {
-      throw new Error(`*** target file \`${output}' has both : and :: entries.`);
+      throw new Error(
+        `*** target file \`${output}' has both : and :: entries.`,
+      );
     }
 
     if (
@@ -241,7 +245,12 @@ class RuleMerger {
     }
 
     applyOutputPattern(rule, output, rule.inputs, node.actual_inputs);
-    applyOutputPattern(rule, output, rule.order_only_inputs, node.actual_order_only_inputs);
+    applyOutputPattern(
+      rule,
+      output,
+      rule.order_only_inputs,
+      node.actual_order_only_inputs,
+    );
 
     if (rule.output_patterns.length >= 1) {
       if (rule.output_patterns.length !== 1) {
