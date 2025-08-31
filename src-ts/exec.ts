@@ -60,7 +60,7 @@ class Executor {
       });
 
       console.log(
-        `ExecNode: ${n.output} for ${neededBy ? neededBy : '(null)'}`,
+        `*kati*: ExecNode: ${n.output} for ${neededBy ? neededBy : '(null)'}`,
       );
 
       // Check if target exists and has no rule

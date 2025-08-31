@@ -667,7 +667,7 @@ export class AutoQuestionVar extends AutoVar {
 
 export class AutoNotImplementedVar extends AutoVar {
   eval(ev: Evaluator): never {
-    ev.error(`Automatic variable \`$${this.sym_}\` isn't supported yet`);
+    throw new Error(`Automatic variable \`$${this.sym_}\` isn't supported yet`);
   }
 }
 

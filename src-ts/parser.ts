@@ -443,10 +443,7 @@ export class Parser {
           }
           if (i > b) {
             list.push(
-              new Literal(
-                itemLoc,
-                StrUtil.trimRightSpace(s.substring(b, i)),
-              ),
+              new Literal(itemLoc, StrUtil.trimRightSpace(s.substring(b, i))),
             );
           }
           list.push(new Literal(itemLoc, ' '));

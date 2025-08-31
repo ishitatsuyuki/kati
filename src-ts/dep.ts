@@ -1,7 +1,6 @@
 import {Evaluator, Loc} from './evaluator';
 import {Var, Vars} from './var';
 import {hasSuffix, Pattern} from './strutil';
-
 export type Symbol = string;
 export type SymbolSet = Set<string>;
 

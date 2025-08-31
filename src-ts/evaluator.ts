@@ -174,10 +174,6 @@ export class Evaluator {
     this.variables.assign(name, var_);
   }
 
-  error(msg: string): never {
-    throw new Error(msg);
-  }
-
   lookupVar(name: string): Var {
     return this.variables.lookup(name);
   }

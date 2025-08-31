@@ -304,7 +304,7 @@ class RuleStmt implements Stmt {
     // Check for empty targets
     if (beforeTerm.match(/^\s*[;\s]*$/)) {
       if (this.sep === RuleSep.SEMICOLON) {
-        ev.error('*** missing rule before commands.');
+        throw new Error('*** missing rule before commands.');
       }
       return;
     }
@@ -312,7 +312,7 @@ class RuleStmt implements Stmt {
     // Parse targets from the left-hand side
     const colonPos = beforeTerm.indexOf(':');
     if (colonPos === -1) {
-      ev.error('*** missing separator.');
+      throw new Error('*** missing separator.');
     }
 
     const targetsString = beforeTerm.substring(0, colonPos);
@@ -325,7 +325,7 @@ class RuleStmt implements Stmt {
       .filter(t => t.length > 0);
 
     if (targetStrings.length === 0) {
-      ev.error('*** missing target.');
+      throw new Error('*** missing target.');
     }
 
     let isPatternRule = false;
@@ -522,7 +522,7 @@ class CommandStmt implements Stmt {
         lastRule.cmd_lineno = this.loc.lineno;
       }
     } else {
-      ev.error('*** commands commence before first target.');
+      throw new Error('*** commands commence before first target.');
     }
   }
 
@@ -624,7 +624,7 @@ class IncludeStmt implements Stmt {
       try {
         if (!fs.existsSync(fullPath)) {
           if (this.should_exist) {
-            ev.error(
+            throw new Error(
               `*** No rule to make target '${file}', needed by '${this.loc.filename}'.  Stop.`,
             );
           }
@@ -643,7 +643,7 @@ class IncludeStmt implements Stmt {
         // A full implementation would require integrating with the parser
       } catch (error) {
         if (this.should_exist) {
-          ev.error(`Error including '${file}': ${error}`);
+          throw new Error(`Error including '${file}': ${error}`);
         }
         // For -include, silently skip errors
       }
@@ -740,7 +740,7 @@ export class ParseErrorStmt implements Stmt {
 
   eval(ev: Evaluator): void {
     ev.setLoc(this.loc);
-    ev.error(this.msg);
+    throw new Error(this.msg);
   }
 
   debugString(): string {

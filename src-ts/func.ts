@@ -258,10 +258,14 @@ function wordFunc(args: Value[], ev: Evaluator): string {
   const n = getNumericValueForFunc(nStr);
 
   if (n < 0) {
-    ev.error(`*** non-numeric first argument to 'word' function: '${nStr}'.`);
+    throw new Error(
+      `*** non-numeric first argument to 'word' function: '${nStr}'.`,
+    );
   }
   if (n === 0) {
-    ev.error("*** first argument to 'word' function must be greater than 0.");
+    throw new Error(
+      "*** first argument to 'word' function must be greater than 0.",
+    );
   }
 
   const text = args[1].eval(ev);
@@ -279,19 +283,21 @@ function wordlistFunc(args: Value[], ev: Evaluator): string {
   const si = getNumericValueForFunc(sStr);
 
   if (si < 0) {
-    ev.error(
+    throw new Error(
       `*** non-numeric first argument to 'wordlist' function: '${sStr}'.`,
     );
   }
   if (si === 0) {
-    ev.error(`*** invalid first argument to 'wordlist' function: ${sStr}`);
+    throw new Error(
+      `*** invalid first argument to 'wordlist' function: ${sStr}`,
+    );
   }
 
   const eStr = args[1].eval(ev);
   const ei = getNumericValueForFunc(eStr);
 
   if (ei < 0) {
-    ev.error(
+    throw new Error(
       `*** non-numeric second argument to 'wordlist' function: '${eStr}'.`,
     );
   }
@@ -546,7 +552,7 @@ function shellFunc(args: Value[], ev: Evaluator): string {
 
   if (ev.avoid_io() && !hasNoIoInShellScript(cmd)) {
     if (ev.eval_depth() > 1) {
-      ev.error(
+      throw new Error(
         "kati doesn't support passing results of $(shell) to other make constructs: " +
           cmd,
       );
@@ -682,30 +688,30 @@ function errorFunc(args: Value[], ev: Evaluator): string {
     return '';
   }
 
-  ev.error(`*** ${msg}.`);
+  throw new Error(`*** ${msg}.`);
 }
 
 // File I/O functions
 function fileFunc(args: Value[], ev: Evaluator): string {
   if (ev.avoid_io()) {
-    ev.error('*** $(file ...) is not supported in rules.');
+    throw new Error('*** $(file ...) is not supported in rules.');
   }
 
   const arg = args[0].eval(ev);
   const filename = StrUtil.trimSpace(arg);
 
   if (filename.length <= 1) {
-    ev.error('*** Missing filename');
+    throw new Error('*** Missing filename');
   }
 
   if (filename[0] === '<') {
     // Read file
     const file = StrUtil.trimLeftSpace(filename.substring(1));
     if (!file) {
-      ev.error('*** Missing filename');
+      throw new Error('*** Missing filename');
     }
     if (args.length > 1) {
-      ev.error('*** invalid argument');
+      throw new Error('*** invalid argument');
     }
 
     try {
@@ -729,7 +735,7 @@ function fileFunc(args: Value[], ev: Evaluator): string {
 
     file = StrUtil.trimLeftSpace(file);
     if (!file) {
-      ev.error('*** Missing filename');
+      throw new Error('*** Missing filename');
     }
 
     let text = '';
@@ -747,12 +753,12 @@ function fileFunc(args: Value[], ev: Evaluator): string {
         fs.writeFileSync(file, text);
       }
     } catch (error) {
-      ev.error('*** file write failed.');
+      throw new Error('*** file write failed.');
     }
 
     return '';
   } else {
-    ev.error(`*** Invalid file operation: ${filename}. Stop.`);
+    throw new Error(`*** Invalid file operation: ${filename}. Stop.`);
   }
 }
 

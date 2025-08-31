@@ -34,6 +34,7 @@ import (
 var ninja bool
 var genAllTargets bool
 var rkati bool
+var tskati bool
 
 func init() {
 	// suppress GNU make jobserver magic when calling "make"
@@ -44,6 +45,7 @@ func init() {
 	flag.BoolVar(&ninja, "ninja", false, "use ninja")
 	flag.BoolVar(&genAllTargets, "all", false, "use --gen_all_targets")
 	flag.BoolVar(&rkati, "rkati", false, "compare rkati against ckati")
+	flag.BoolVar(&tskati, "tskati", false, "compare tskati against ckati")
 }
 
 type normalization struct {
@@ -89,7 +91,7 @@ var normalizeKati = []normalization{
 	normalizeQuotes,
 
 	// kati specific log messages
-	{regexp.MustCompile(`\*kati\*[^\n]*`), ""},
+	{regexp.MustCompile(`\*kati\*[^\n]*\n`), ""},
 	{regexp.MustCompile(`c?kati: `), ""},
 	{regexp.MustCompile(`/bin/(ba)?sh: line 1: `), ""},
 	{regexp.MustCompile(`/bin/sh: `), ""},
@@ -176,7 +178,7 @@ func runMake(t *testing.T, prefix []string, dir string, silent bool, tc string) 
 	return string(output)
 }
 
-func runKati(t *testing.T, test, dir string, silent bool, rust bool, tc string) string {
+func runKati(t *testing.T, test, dir string, silent bool, rust bool, ts bool, tc string) string {
 	write := func(f string, data []byte) {
 		suffix := ""
 		if tc != "" {
@@ -189,13 +191,14 @@ func runKati(t *testing.T, test, dir string, silent bool, rust bool, tc string) 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var kati string
-	if rust {
-		kati = "../../../target/debug/rkati"
+	var cmd *exec.Cmd
+	if ts {
+		cmd = exec.CommandContext(ctx, "node", "../../../dist/index.js", "--use_find_emulator")
+	} else if rust {
+		cmd = exec.CommandContext(ctx, "../../../target/debug/rkati", "--use_find_emulator")
 	} else {
-		kati = "../../../ckati"
+		cmd = exec.CommandContext(ctx, "../../../ckati", "--use_find_emulator")
 	}
-	cmd := exec.CommandContext(ctx, kati, "--use_find_emulator")
 	if ninja {
 		cmd.Args = append(cmd.Args, "--ninja")
 	}
@@ -241,20 +244,21 @@ func runKati(t *testing.T, test, dir string, silent bool, rust bool, tc string) 
 	return string(output)
 }
 
-func runKatiInScript(t *testing.T, script, dir string, isNinjaTest bool, rust bool) string {
+func runKatiInScript(t *testing.T, script, dir string, isNinjaTest bool, rust bool, ts bool) string {
 	write := func(f string, data []byte) {
 		if err := ioutil.WriteFile(filepath.Join(dir, f), data, 0666); err != nil {
 			t.Error(err)
 		}
 	}
 
-	var kati string
-	if rust {
-		kati = "../../../target/debug/rkati"
+	var args []string
+	if ts {
+		args = []string{"bash", script, "node", "../../../dist/index.js"}
+	} else if rust {
+		args = []string{"bash", script, "../../../target/debug/rkati"}
 	} else {
-		kati = "../../../ckati"
+		args = []string{"bash", script, "../../../ckati"}
 	}
-	args := []string{"bash", script, kati}
 	if isNinjaTest {
 		args = append(args, "--ninja", "--regen")
 	}
@@ -391,6 +395,11 @@ func TestKati(t *testing.T) {
 			t.Fatalf("rkati must be built before testing: %s", err)
 		}
 	}
+	if tskati {
+		if _, err := os.Stat("dist/index.js"); err != nil {
+			t.Fatalf("tskati must be built before testing (run npm run build): %s", err)
+		}
+	}
 	if ninja {
 		if _, err := exec.LookPath("ninja"); err != nil {
 			t.Fatal(err)
@@ -433,7 +442,7 @@ func TestKati(t *testing.T) {
 				if err := os.MkdirAll(outRKati, 0777); err != nil {
 					t.Fatal(err)
 				}
-			} else {
+			} else if !tskati {
 				if err := os.MkdirAll(outMake, 0777); err != nil {
 					t.Fatal(err)
 				}
@@ -456,7 +465,7 @@ func TestKati(t *testing.T) {
 				setup(outKati)
 				if rkati {
 					setup(outRKati)
-				} else {
+				} else if !tskati {
 					setup(outMake)
 				}
 
@@ -465,11 +474,11 @@ func TestKati(t *testing.T) {
 				isSilent := strings.HasPrefix(name, "submake_")
 
 				for _, tc := range testcases {
-					if !rkati {
+					if !rkati && !tskati {
 						expected[tc] = runMake(t, nil, outMake, ninja || isSilent, tc)
 						expectedFiles[tc] = outputFiles(t, outMake)
 					} else {
-						expected[tc] = runKati(t, name, outKati, isSilent, false, tc)
+						expected[tc] = runKati(t, name, outKati, isSilent, false, false, tc)
 						expectedFiles[tc] = outputFiles(t, outKati)
 					}
 					expectedFailures[tc] = isExpectedFailure(c, tc)
@@ -477,10 +486,13 @@ func TestKati(t *testing.T) {
 
 				for _, tc := range testcases {
 					if rkati {
-						got[tc] = runKati(t, name, outRKati, isSilent, true, tc)
+						got[tc] = runKati(t, name, outRKati, isSilent, true, false, tc)
 						gotFiles[tc] = outputFiles(t, outRKati)
+					} else if tskati {
+						got[tc] = runKati(t, name, outKati, isSilent, false, true, tc)
+						gotFiles[tc] = outputFiles(t, outKati)
 					} else {
-						got[tc] = runKati(t, name, outKati, isSilent, false, tc)
+						got[tc] = runKati(t, name, outKati, isSilent, false, false, tc)
 						gotFiles[tc] = outputFiles(t, outKati)
 					}
 				}
@@ -492,17 +504,19 @@ func TestKati(t *testing.T) {
 
 				scriptName := "../../../testcase/" + name
 
-				if rkati {
-					expected[""] = runKatiInScript(t, scriptName, outKati, isNinjaTest, false)
+				if rkati || tskati {
+					expected[""] = runKatiInScript(t, scriptName, outKati, isNinjaTest, false, false)
 				} else {
 					expected[""] = runMake(t, []string{"bash", scriptName}, outMake, isNinjaTest, "")
 				}
 				expectedFailures[""] = isExpectedFailure(c, "")
 
 				if rkati {
-					got[""] = runKatiInScript(t, scriptName, outRKati, isNinjaTest, true)
+					got[""] = runKatiInScript(t, scriptName, outRKati, isNinjaTest, true, false)
+				} else if tskati {
+					got[""] = runKatiInScript(t, scriptName, outKati, isNinjaTest, false, true)
 				} else {
-					got[""] = runKatiInScript(t, scriptName, outKati, isNinjaTest, false)
+					got[""] = runKatiInScript(t, scriptName, outKati, isNinjaTest, false, false)
 				}
 			}
 
@@ -511,12 +525,15 @@ func TestKati(t *testing.T) {
 				if rkati {
 					a = "ckati"
 					b = "rkati"
+				} else if tskati {
+					a = "ckati"
+					b = "tskati"
 				} else {
 					a = "Make"
 					b = "Kati"
 				}
 
-				if !rkati && strings.Contains(m, "FAIL") {
+				if !rkati && !tskati && strings.Contains(m, "FAIL") {
 					t.Fatalf("%s returned 'FAIL':\n%q", a, m)
 				}
 
@@ -526,7 +543,7 @@ func TestKati(t *testing.T) {
 					diffs = dmp.DiffCleanupSemantic(diffs)
 					t.Errorf("Different output from %s (red) to the expected value from %s (green):\n%s",
 						b, a, dmp.DiffPrettyText(diffs))
-				} else if expectFail && m == k && !rkati {
+				} else if expectFail && m == k && !rkati && !tskati {
 					t.Errorf("Expected failure, but output is the same")
 				}
 
