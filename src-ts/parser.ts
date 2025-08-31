@@ -351,7 +351,7 @@ export class Parser {
     let b = 0;
     let saveParenChar = '';
     let parenDepth = 0;
-    let i = 0;
+    let i: number;
     const list: Value[] = [];
 
     for (i = 0; i < s.length; i++) {
@@ -444,14 +444,14 @@ export class Parser {
           if (i > b) {
             list.push(
               new Literal(
-                Object.freeze({...loc}),
-                StrUtil.trimRightSpace(s.substring(b, i - b)),
+                itemLoc,
+                StrUtil.trimRightSpace(s.substring(b, i)),
               ),
             );
           }
-          list.push(new Literal(Object.freeze({...loc}), ' '));
+          list.push(new Literal(itemLoc, ' '));
           i += 2;
-          if (n === '\r' && i + 2 < s.length && s[i + 2] === '\n') {
+          if (n === '\r' && i < s.length && s[i + 2] === '\n') {
             i++;
           }
           for (; i < s.length; i++) {
@@ -847,10 +847,6 @@ export class Parser {
       return false;
     }
     return true;
-  }
-
-  private removeComment(line: string): string {
-    return StrUtil.removeComment(line);
   }
 
   private enterIf(stmt: IfStmt): void {
