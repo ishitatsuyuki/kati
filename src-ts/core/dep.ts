@@ -1,4 +1,4 @@
-import {Loc} from './evaluator';
+import {Evaluator, Loc} from './evaluator';
 import {Expr} from './ast';
 import {Var, Vars} from './var';
 import {Pattern, hasPrefix, hasSuffix} from '../utils/strutil';
@@ -303,12 +303,13 @@ class RuleMerger {
 }
 
 export function makeDep(
+  ev: Evaluator,
   rules: Rule[],
   ruleVars: Map<Symbol, DepVars>,
   targets: Symbol[],
 ): NamedDepNode[] {
   const builder = new DepBuilder(rules, ruleVars);
-  return builder.build(targets);
+  return builder.build(ev, targets);
 }
 
 class DepBuilder {
@@ -355,7 +356,7 @@ class DepBuilder {
       // Handle implicit outputs
       const implicitOutputsVar = vars.get(this.implicit_outputs_var_name_);
       if (implicitOutputsVar) {
-        // Process implicit outputs (simplified - would need proper evaluation)
+        // TODO: Process implicit outputs (simplified - would need proper evaluation)
         // const implicitOutputs = implicitOutputsVar.eval(ev);
         // Parse and process outputs...
       }
@@ -363,7 +364,7 @@ class DepBuilder {
       // Handle validations
       const validationsVar = vars.get(this.validations_var_name_);
       if (validationsVar) {
-        // Process validations (simplified - would need proper evaluation)
+        // TODO: Process validations (simplified - would need proper evaluation)
         // const validations = validationsVar.eval(ev);
         // Parse and process validations...
       }
@@ -463,7 +464,7 @@ class DepBuilder {
     return this.rule_vars_.get(output) || null;
   }
 
-  build(targets: Symbol[]): NamedDepNode[] {
+  build(ev: Evaluator, targets: Symbol[]): NamedDepNode[] {
     if (!this.first_rule_) {
       throw new Error('*** No targets.');
     }
@@ -472,14 +473,14 @@ class DepBuilder {
     const nodes: NamedDepNode[] = [];
 
     for (const target of targetList) {
-      const node = this.buildPlan(target, '');
+      const node = this.buildPlan(ev, target, '');
       nodes.push({name: target, node});
     }
 
     return nodes;
   }
 
-  private buildPlan(output: Symbol, neededBy: Symbol): DepNode {
+  private buildPlan(ev: Evaluator, output: Symbol, neededBy: Symbol): DepNode {
     const existing = this.done_.get(output);
     if (existing) {
       return existing;
@@ -515,21 +516,27 @@ class DepBuilder {
       ruleMerger.fillDepNode(output, null, node);
     }
 
-    // Recursively build dependencies
-    for (const input of node.actual_inputs) {
-      const depNode = this.buildPlan(input, output);
-      node.deps.push({input, node: depNode});
-    }
+    ev.withScope(scope => {
+      node.rule_vars?.forEach((value, key) => {
+        scope.set(key, value);
+      });
 
-    for (const orderOnly of node.actual_order_only_inputs) {
-      const depNode = this.buildPlan(orderOnly, output);
-      node.order_onlys.push({input: orderOnly, node: depNode});
-    }
+      // Recursively build dependencies
+      for (const input of node.actual_inputs) {
+        const depNode = this.buildPlan(ev, input, output);
+        node.deps.push({input, node: depNode});
+      }
 
-    for (const validation of node.actual_validations) {
-      const depNode = this.buildPlan(validation, output);
-      node.validations.push({input: validation, node: depNode});
-    }
+      for (const orderOnly of node.actual_order_only_inputs) {
+        const depNode = this.buildPlan(ev, orderOnly, output);
+        node.order_onlys.push({input: orderOnly, node: depNode});
+      }
+
+      for (const validation of node.actual_validations) {
+        const depNode = this.buildPlan(ev, validation, output);
+        node.validations.push({input: validation, node: depNode});
+      }
+    });
 
     node.has_rule = true;
     node.is_default_target = this.first_rule_ === output;

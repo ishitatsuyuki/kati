@@ -15,16 +15,8 @@ interface CommandResult {
   stderr: string;
 }
 
-// Scoped frame for execution context (placeholder - matches C++ ScopedFrame)
-class ScopedFrame {
-  constructor(ev: Evaluator, frameType: string, output: string, loc: Loc) {
-    // TODO: Implement proper frame management if needed
-  }
-}
-
 /**
  * Main executor class that handles dependency graph execution
- * This is a TypeScript port of the C++ Executor class from src/exec.cc
  */
 class Executor {
   private ce_: CommandEvaluator;
@@ -45,7 +37,7 @@ class Executor {
    * @param neededBy The target that needs this node (for error reporting)
    * @returns The timestamp of the executed node
    */
-  async execNode(n: DepNode, neededBy: string | null): Promise<number> {
+  execNode(n: DepNode, neededBy: string | null): number {
     // Check if already processed
     const found = this.done_.get(n.output);
     if (found !== undefined) {
@@ -60,15 +52,9 @@ class Executor {
     // Mark as processing to detect circular dependencies
     this.done_.set(n.output, kProcessing);
 
-    // Create scoped frame for execution context
-    const frame = new ScopedFrame(
-      this.ce_.evaluator(),
-      'EXEC',
-      n.output,
-      n.loc,
-    );
+    const outputTs = this.getTimestamp(n.output);
 
-    const outputTs = await this.getTimestamp(n.output);
+    this.ce_.evaluator().withScope(scope => {
 
     console.log(`ExecNode: ${n.output} for ${neededBy ? neededBy : '(null)'}`);
 
@@ -86,10 +72,10 @@ class Executor {
     // Process order-only dependencies first
     let latest = kProcessing;
     for (const d of n.order_onlys) {
-      if (await this.exists(d.node.output)) {
+      if (fs.existsSync(d.node.output)) {
         continue;
       }
-      const ts = await this.execNode(d.node, n.output);
+      const ts = this.execNode(d.node, n.output);
       if (latest < ts) {
         latest = ts;
       }
@@ -97,7 +83,7 @@ class Executor {
 
     // Process regular dependencies
     for (const d of n.deps) {
-      const ts = await this.execNode(d.node, n.output);
+      const ts = this.execNode(d.node, n.output);
       if (latest < ts) {
         latest = ts;
       }
@@ -139,6 +125,7 @@ class Executor {
         }
       }
     }
+    })
 
     this.done_.set(n.output, outputTs);
     return outputTs;
@@ -156,9 +143,9 @@ class Executor {
    * @param path File path
    * @returns Timestamp or kNotExist if file doesn't exist
    */
-  private async getTimestamp(path: string): Promise<number> {
+  private getTimestamp(path: string): number {
     try {
-      const stat = await fs.promises.stat(path);
+      const stat = fs.statSync(path);
       return stat.mtime.getTime() / 1000; // Convert to seconds like C++
     } catch {
       return kNotExist;

@@ -1,8 +1,8 @@
 import {KatiFlags} from '../cli/flags';
 import {Parser} from '../parser';
-import {Stmt, Value, Literal} from './ast';
-import {Vars, Var, SimpleVar, VarOrigin} from './var';
-import {Rule, DepNode, NamedDepNode, Symbol, makeDep, DepVars} from './dep';
+import {Stmt, Value} from './ast';
+import {SimpleVar, Var, VarOrigin, Vars} from './var';
+import {DepVars, makeDep, NamedDepNode, Rule, Symbol} from './dep';
 import {exec} from './exec';
 import * as fs from 'fs';
 
@@ -113,8 +113,7 @@ export class Evaluator {
       `*kati*: Building dependency graph for targets: ${targets.join(', ')}`,
     );
 
-    const symbolTargets = targets;
-    const nodes = makeDep(this.rules, this.ruleVars, symbolTargets);
+    const nodes = makeDep(this, this.rules, this.ruleVars, targets);
 
     console.log(`*kati*: Built dependency graph with ${nodes.length} nodes`);
     return nodes;
