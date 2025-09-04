@@ -1,6 +1,7 @@
 import {Evaluator, Loc} from './evaluator';
 import {Var, Vars} from './var';
 import {hasSuffix, Pattern} from './strutil';
+import {Value} from './ast';
 export type Symbol = string;
 export type SymbolSet = Set<string>;
 
@@ -15,7 +16,7 @@ export interface DepNode {
   depfile_var: Var | null;
   ninja_pool_var: Var | null;
   tags_var: Var | null;
-  cmds: string[];
+  cmds: Value[];
   actual_inputs: Symbol[];
   actual_order_only_inputs: Symbol[];
   actual_validations: Symbol[];
@@ -40,7 +41,7 @@ export interface Rule {
   inputs: Symbol[];
   order_only_inputs: Symbol[];
   output_patterns: Symbol[];
-  cmds: string[];
+  cmds: Value[];
   is_double_colon: boolean;
   is_suffix_rule: boolean;
 }
@@ -512,6 +513,15 @@ class DepBuilder {
     const ruleMerger = this.lookupRuleMerger(output);
     if (ruleMerger) {
       ruleMerger.fillDepNode(output, null, node);
+    }
+
+    // Populate rule-specific variables
+    const ruleVars = this.lookupRuleVars(output);
+    if (ruleVars && ruleVars.size > 0) {
+      node.rule_vars = new Vars();
+      for (const [name, var_] of ruleVars) {
+        node.rule_vars.set(name, var_);
+      }
     }
 
     ev.withScope(scope => {

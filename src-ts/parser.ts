@@ -762,7 +762,7 @@ export class Parser {
     this.afterRule = true;
   }
 
-  private parseAssignStatement(
+  public static parseAssignStatement(
     line: string,
     sep: number,
   ): {lhs: string; rhs: string; op: AssignOp} {
@@ -806,7 +806,7 @@ export class Parser {
       lhs,
       rhs: rawRhs,
       op,
-    } = this.parseAssignStatement(line, separatorPos);
+    } = Parser.parseAssignStatement(line, separatorPos);
 
     // Check for final assignment ($=)
     let rhs = rawRhs;

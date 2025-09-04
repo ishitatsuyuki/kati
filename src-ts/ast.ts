@@ -1,8 +1,9 @@
 import {joinStrings, Pattern, splitSpace} from './strutil';
 import {getFuncInfo} from './func';
 import {Evaluator, Loc} from './evaluator';
-import {RecursiveVar, SimpleVar, VarOrigin} from './var';
+import {RecursiveVar, SimpleVar, Var, VarOrigin} from './var';
 import {Rule} from './dep';
+import {Parser} from './parser';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -287,14 +288,6 @@ interface Stmt {
 }
 
 class RuleStmt implements Stmt {
-  constructor(
-    public loc: Loc,
-    public lhs: Expr,
-    public sep: RuleSep,
-    public rhs: Expr | null = null,
-    public orig?: string,
-  ) {}
-
   eval(ev: Evaluator): void {
     ev.setLoc(this.loc);
 
@@ -319,10 +312,7 @@ class RuleStmt implements Stmt {
     const afterTargets = beforeTerm.substring(colonPos + 1);
 
     // Split targets by whitespace and check for pattern rules
-    const targetStrings = targetsString
-      .trim()
-      .split(/\s+/)
-      .filter(t => t.length > 0);
+    const targetStrings = splitSpace(targetsString);
 
     if (targetStrings.length === 0) {
       throw new Error('*** missing target.');
@@ -344,6 +334,29 @@ class RuleStmt implements Stmt {
       remainingAfterTargets = remainingAfterTargets.substring(1);
     }
 
+    // Check if this is a rule-specific variable assignment
+    // Look for assignment operators (=, +=, :=, ?=) but only if there's no ';' before them
+    let separatorPos = remainingAfterTargets.search(/[=;]/);
+    let separator = '';
+    if (separatorPos !== -1) {
+      separator = remainingAfterTargets[separatorPos];
+    } else if (this.sep === RuleSep.EQ || this.sep === RuleSep.FINALEQ) {
+      separatorPos = remainingAfterTargets.length;
+      // Assignment operator is the rule separator itself
+      separator = '=';
+    }
+
+    // If we have an assignment and there's content before the separator
+    if (separator === '=' && separatorPos !== 0) {
+      this.evalRuleSpecificAssign(
+        ev,
+        targetStrings,
+        remainingAfterTargets,
+        separatorPos,
+      );
+      return;
+    }
+
     // Parse prerequisites and order-only inputs
     let prereqString = remainingAfterTargets;
     let orderOnlyInputs: string[] = [];
@@ -353,16 +366,10 @@ class RuleStmt implements Stmt {
     if (pipePos !== -1) {
       prereqString = remainingAfterTargets.substring(0, pipePos);
       const orderOnlyString = remainingAfterTargets.substring(pipePos + 1);
-      orderOnlyInputs = orderOnlyString
-        .trim()
-        .split(/\s+/)
-        .filter(p => p.length > 0);
+      orderOnlyInputs = splitSpace(orderOnlyString);
     }
 
-    const prerequisites = prereqString
-      .trim()
-      .split(/\s+/)
-      .filter(p => p.length > 0);
+    const prerequisites = splitSpace(prereqString);
 
     // Create Rule object
     const rule: Rule = {
@@ -380,13 +387,118 @@ class RuleStmt implements Stmt {
 
     // Handle semicolon separator (inline command)
     if (this.sep === RuleSep.SEMICOLON && this.rhs) {
-      const command = this.rhs.eval(ev);
-      rule.cmds.push(command);
+      rule.cmds.push(this.rhs);
     }
 
     // Add rule to evaluator
     ev.addRule(rule);
   }
+
+  private evalRuleSpecificAssign(
+    ev: Evaluator,
+    targets: string[],
+    afterTargets: string,
+    separatorPos: number,
+  ): void {
+    // Parse the assignment from the afterTargets string
+    const {
+      lhs: varName,
+      rhs: rhsString,
+      op: assignOp,
+    } = Parser.parseAssignStatement(afterTargets, separatorPos);
+
+    const isFinal = this.sep === RuleSep.FINALEQ;
+
+    // Create the appropriate RHS value
+    let rhsValue: Value;
+    if (rhsString === '') {
+      rhsValue = this.rhs || new Literal(this.loc, '');
+    } else if (this.rhs) {
+      // Combine parsed RHS with rule RHS
+      const sepStr = this.sep === RuleSep.SEMICOLON ? ' ; ' : ' = ';
+      rhsValue = new ValueList(this.loc, [
+        new Literal(this.loc, rhsString),
+        new Literal(this.loc, sepStr),
+        this.rhs,
+      ]);
+    } else {
+      rhsValue = new Literal(this.loc, rhsString);
+    }
+
+    // Create and assign the variable for each target
+    for (const target of targets) {
+      let variable: Var;
+
+      switch (assignOp) {
+        case AssignOp.COLON_EQ:
+          // Simply expanded variable - evaluate immediately
+          {
+            const value = rhsValue.eval(ev);
+            variable = new SimpleVar(value, VarOrigin.FILE, null, this.loc);
+          }
+          break;
+
+        case AssignOp.EQ:
+          // Recursively expanded variable
+          variable = new RecursiveVar(
+            rhsValue,
+            VarOrigin.FILE,
+            null,
+            this.loc,
+            rhsString,
+          );
+          break;
+
+        case AssignOp.PLUS_EQ:
+          // Append to existing variable
+          {
+            const existingVar = ev.getRuleVars(target)?.get(varName);
+            if (existingVar && existingVar.isDefined()) {
+              existingVar.appendVar(ev, rhsValue);
+              continue; // Skip creating new variable
+            } else {
+              // Create new variable if it doesn't exist
+              variable = new RecursiveVar(
+                rhsValue,
+                VarOrigin.FILE,
+                null,
+                this.loc,
+                rhsString,
+              );
+            }
+          }
+          break;
+
+        case AssignOp.QUESTION_EQ:
+          // Set only if undefined
+          {
+            const existingVar = ev.getRuleVars(target)?.get(varName);
+            if (existingVar && existingVar.isDefined()) {
+              continue; // Skip if already defined
+            }
+            const value = rhsValue.eval(ev);
+            variable = new SimpleVar(value, VarOrigin.FILE, null, this.loc);
+          }
+          break;
+      }
+
+      // Set the variable as rule-specific
+      ev.setRuleVar(target, varName, variable);
+
+      // Handle final assignments (read-only)
+      if (isFinal) {
+        variable.setReadOnly();
+      }
+    }
+  }
+
+  constructor(
+    public loc: Loc,
+    public lhs: Expr,
+    public sep: RuleSep,
+    public rhs: Expr | null = null,
+    public orig?: string,
+  ) {}
 
   debugString(): string {
     const rhsStr = this.rhs ? ` ${this.sep} ${this.rhs.debugString()}` : '';
@@ -509,13 +621,11 @@ class CommandStmt implements Stmt {
   eval(ev: Evaluator): void {
     ev.setLoc(this.loc);
 
-    const command = this.expr.eval(ev);
-
     // Add command to the most recently added rule
     const rules = ev.getRules();
     if (rules.length > 0) {
       const lastRule = rules[rules.length - 1];
-      lastRule.cmds.push(command);
+      lastRule.cmds.push(this.expr);
 
       // Set command location if not already set
       if (!lastRule.cmd_lineno) {

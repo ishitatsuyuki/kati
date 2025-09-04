@@ -495,7 +495,7 @@ export class CommandEvaluator {
 
     // Process each command value
     for (const cmdValue of node.cmds) {
-      const lines = cmdValue.split('\n');
+      const lines = cmdValue.eval(this.ev_).split('\n');
 
       for (const line of lines) {
         if (line.trim() === '') continue;
