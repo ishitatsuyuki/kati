@@ -208,7 +208,7 @@ func runKati(t *testing.T, test, dir string, silent bool, rust bool, ts bool, tc
 	if silent {
 		cmd.Args = append(cmd.Args, "-s")
 	}
-	cmd.Args = append(cmd.Args, "SHELL=/bin/bash")
+	// cmd.Args = append(cmd.Args, "SHELL=/bin/bash")
 	if tc != "" && (!genAllTargets || strings.Contains(test, "makecmdgoals")) {
 		cmd.Args = append(cmd.Args, tc)
 	}
@@ -438,11 +438,11 @@ func TestKati(t *testing.T) {
 			if err := os.MkdirAll(outKati, 0777); err != nil {
 				t.Fatal(err)
 			}
-			if rkati {
+			if rkati || tskati {
 				if err := os.MkdirAll(outRKati, 0777); err != nil {
 					t.Fatal(err)
 				}
-			} else if !tskati {
+			} else {
 				if err := os.MkdirAll(outMake, 0777); err != nil {
 					t.Fatal(err)
 				}
@@ -463,9 +463,9 @@ func TestKati(t *testing.T) {
 					os.Symlink("../../../testcase/submake", filepath.Join(dir, "submake"))
 				}
 				setup(outKati)
-				if rkati {
+				if rkati || tskati {
 					setup(outRKati)
-				} else if !tskati {
+				} else {
 					setup(outMake)
 				}
 
@@ -489,8 +489,8 @@ func TestKati(t *testing.T) {
 						got[tc] = runKati(t, name, outRKati, isSilent, true, false, tc)
 						gotFiles[tc] = outputFiles(t, outRKati)
 					} else if tskati {
-						got[tc] = runKati(t, name, outKati, isSilent, false, true, tc)
-						gotFiles[tc] = outputFiles(t, outKati)
+						got[tc] = runKati(t, name, outRKati, isSilent, false, true, tc)
+						gotFiles[tc] = outputFiles(t, outRKati)
 					} else {
 						got[tc] = runKati(t, name, outKati, isSilent, false, false, tc)
 						gotFiles[tc] = outputFiles(t, outKati)
@@ -514,7 +514,7 @@ func TestKati(t *testing.T) {
 				if rkati {
 					got[""] = runKatiInScript(t, scriptName, outRKati, isNinjaTest, true, false)
 				} else if tskati {
-					got[""] = runKatiInScript(t, scriptName, outKati, isNinjaTest, false, true)
+					got[""] = runKatiInScript(t, scriptName, outRKati, isNinjaTest, false, true)
 				} else {
 					got[""] = runKatiInScript(t, scriptName, outKati, isNinjaTest, false, false)
 				}

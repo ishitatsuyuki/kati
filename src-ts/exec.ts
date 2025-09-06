@@ -117,6 +117,7 @@ class Executor {
           );
 
           process.stdout.write(result.stdout);
+          process.stderr.write(result.stderr);
 
           if (result.exitCode !== 0) {
             if (command.ignore_error) {
