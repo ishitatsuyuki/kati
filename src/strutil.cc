@@ -27,9 +27,200 @@
 
 #include "log.h"
 
+// SIMD support for fast whitespace scanning
+#if defined(__SSE2__)
+#include <cstdint>
+#include <emmintrin.h>
+#if defined(__SSSE3__)
+#include <tmmintrin.h>
+#define USE_SIMD_WHITESPACE 1
+#endif
+#endif
+
 static bool isSpace(char c) {
   return (9 <= c && c <= 13) || c == 32;
 }
+
+#ifdef USE_SIMD_WHITESPACE
+// Fast SIMD whitespace scanner using the low-nibble lookup technique
+// described in https://lemire.me/blog/2024/07/20/scan-html-even-faster-with-simd-instructions-c-and-c/
+//
+// The technique uses pshufb to do 16 parallel lookups in a table indexed by
+// the low 4 bits of each byte. The lookup table contains the target characters
+// themselves at their low-nibble positions. By comparing the lookup result
+// with the original byte, we identify matches.
+//
+// For whitespace (0x09-0x0D and 0x20):
+//   low_nibble_mask[0x0] = 0x20 (space)
+//   low_nibble_mask[0x9] = 0x09 (tab)
+//   low_nibble_mask[0xA] = 0x0A (LF)
+//   low_nibble_mask[0xB] = 0x0B (VT)
+//   low_nibble_mask[0xC] = 0x0C (FF)
+//   low_nibble_mask[0xD] = 0x0D (CR)
+
+// Returns the offset of the first whitespace character, or len if none found.
+static size_t FindWhitespaceSIMD(const char* s, size_t len) {
+  // Lookup table: entry at index i contains the whitespace char with low nibble i
+  // Whitespace chars: 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20
+  alignas(16) static const char kLowNibbleMask[16] = {
+      0x20,  // index 0: space (0x20)
+      0,     // index 1
+      0,     // index 2
+      0,     // index 3
+      0,     // index 4
+      0,     // index 5
+      0,     // index 6
+      0,     // index 7
+      0,     // index 8
+      0x09,  // index 9: tab (0x09)
+      0x0A,  // index A: LF (0x0A)
+      0x0B,  // index B: VT (0x0B)
+      0x0C,  // index C: FF (0x0C)
+      0x0D,  // index D: CR (0x0D)
+      0,     // index E
+      0,     // index F
+  };
+
+  const __m128i low_nibble_mask = _mm_load_si128((const __m128i*)kLowNibbleMask);
+  const __m128i v0f = _mm_set1_epi8(0x0F);
+
+  size_t i = 0;
+
+  // Process 64 bytes at a time (4x16-byte vectors) for better throughput
+  while (i + 64 <= len) {
+    // Load 4 chunks of 16 bytes each
+    __m128i data0 = _mm_loadu_si128((const __m128i*)(s + i));
+    __m128i data1 = _mm_loadu_si128((const __m128i*)(s + i + 16));
+    __m128i data2 = _mm_loadu_si128((const __m128i*)(s + i + 32));
+    __m128i data3 = _mm_loadu_si128((const __m128i*)(s + i + 48));
+
+    // Extract low nibbles
+    __m128i nibbles0 = _mm_and_si128(data0, v0f);
+    __m128i nibbles1 = _mm_and_si128(data1, v0f);
+    __m128i nibbles2 = _mm_and_si128(data2, v0f);
+    __m128i nibbles3 = _mm_and_si128(data3, v0f);
+
+    // Lookup in table using pshufb
+    __m128i lookup0 = _mm_shuffle_epi8(low_nibble_mask, nibbles0);
+    __m128i lookup1 = _mm_shuffle_epi8(low_nibble_mask, nibbles1);
+    __m128i lookup2 = _mm_shuffle_epi8(low_nibble_mask, nibbles2);
+    __m128i lookup3 = _mm_shuffle_epi8(low_nibble_mask, nibbles3);
+
+    // Compare: if lookup == original byte, it's a whitespace char
+    __m128i match0 = _mm_cmpeq_epi8(lookup0, data0);
+    __m128i match1 = _mm_cmpeq_epi8(lookup1, data1);
+    __m128i match2 = _mm_cmpeq_epi8(lookup2, data2);
+    __m128i match3 = _mm_cmpeq_epi8(lookup3, data3);
+
+    // Convert to bitmasks
+    int mask0 = _mm_movemask_epi8(match0);
+    int mask1 = _mm_movemask_epi8(match1);
+    int mask2 = _mm_movemask_epi8(match2);
+    int mask3 = _mm_movemask_epi8(match3);
+
+    // Combine into 64-bit mask
+    uint64_t mask = (uint64_t)mask0 | ((uint64_t)mask1 << 16) |
+                    ((uint64_t)mask2 << 32) | ((uint64_t)mask3 << 48);
+
+    if (mask != 0) {
+      return i + __builtin_ctzll(mask);
+    }
+    i += 64;
+  }
+
+  // Process remaining 16-byte chunks
+  while (i + 16 <= len) {
+    __m128i data = _mm_loadu_si128((const __m128i*)(s + i));
+    __m128i nibbles = _mm_and_si128(data, v0f);
+    __m128i lookup = _mm_shuffle_epi8(low_nibble_mask, nibbles);
+    __m128i match = _mm_cmpeq_epi8(lookup, data);
+    int mask = _mm_movemask_epi8(match);
+    if (mask != 0) {
+      return i + __builtin_ctz(mask);
+    }
+    i += 16;
+  }
+
+  // Handle remaining bytes with scalar code
+  for (; i < len; i++) {
+    if (isSpace(s[i])) {
+      return i;
+    }
+  }
+  return len;
+}
+
+// Returns the offset of the first non-whitespace character, or len if none found.
+static size_t FindNonWhitespaceSIMD(const char* s, size_t len) {
+  alignas(16) static const char kLowNibbleMask[16] = {
+      0x20, 0, 0, 0, 0, 0, 0, 0, 0, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0, 0,
+  };
+
+  const __m128i low_nibble_mask = _mm_load_si128((const __m128i*)kLowNibbleMask);
+  const __m128i v0f = _mm_set1_epi8(0x0F);
+
+  size_t i = 0;
+
+  // Process 64 bytes at a time
+  while (i + 64 <= len) {
+    __m128i data0 = _mm_loadu_si128((const __m128i*)(s + i));
+    __m128i data1 = _mm_loadu_si128((const __m128i*)(s + i + 16));
+    __m128i data2 = _mm_loadu_si128((const __m128i*)(s + i + 32));
+    __m128i data3 = _mm_loadu_si128((const __m128i*)(s + i + 48));
+
+    __m128i nibbles0 = _mm_and_si128(data0, v0f);
+    __m128i nibbles1 = _mm_and_si128(data1, v0f);
+    __m128i nibbles2 = _mm_and_si128(data2, v0f);
+    __m128i nibbles3 = _mm_and_si128(data3, v0f);
+
+    __m128i lookup0 = _mm_shuffle_epi8(low_nibble_mask, nibbles0);
+    __m128i lookup1 = _mm_shuffle_epi8(low_nibble_mask, nibbles1);
+    __m128i lookup2 = _mm_shuffle_epi8(low_nibble_mask, nibbles2);
+    __m128i lookup3 = _mm_shuffle_epi8(low_nibble_mask, nibbles3);
+
+    // Compare: if lookup != original byte, it's NOT whitespace
+    __m128i match0 = _mm_cmpeq_epi8(lookup0, data0);
+    __m128i match1 = _mm_cmpeq_epi8(lookup1, data1);
+    __m128i match2 = _mm_cmpeq_epi8(lookup2, data2);
+    __m128i match3 = _mm_cmpeq_epi8(lookup3, data3);
+
+    // Invert: we want non-whitespace
+    int mask0 = ~_mm_movemask_epi8(match0) & 0xFFFF;
+    int mask1 = ~_mm_movemask_epi8(match1) & 0xFFFF;
+    int mask2 = ~_mm_movemask_epi8(match2) & 0xFFFF;
+    int mask3 = ~_mm_movemask_epi8(match3) & 0xFFFF;
+
+    uint64_t mask = (uint64_t)mask0 | ((uint64_t)mask1 << 16) |
+                    ((uint64_t)mask2 << 32) | ((uint64_t)mask3 << 48);
+
+    if (mask != 0) {
+      return i + __builtin_ctzll(mask);
+    }
+    i += 64;
+  }
+
+  // Process remaining 16-byte chunks
+  while (i + 16 <= len) {
+    __m128i data = _mm_loadu_si128((const __m128i*)(s + i));
+    __m128i nibbles = _mm_and_si128(data, v0f);
+    __m128i lookup = _mm_shuffle_epi8(low_nibble_mask, nibbles);
+    __m128i match = _mm_cmpeq_epi8(lookup, data);
+    int mask = ~_mm_movemask_epi8(match) & 0xFFFF;
+    if (mask != 0) {
+      return i + __builtin_ctz(mask);
+    }
+    i += 16;
+  }
+
+  // Handle remaining bytes with scalar code
+  for (; i < len; i++) {
+    if (!isSpace(s[i])) {
+      return i;
+    }
+  }
+  return len;
+}
+#endif  // USE_SIMD_WHITESPACE
 
 static int SkipUntil(const char* s, size_t len, const char* delimiters) {
   return std::min(len, strcspn(s, delimiters));
@@ -37,10 +228,22 @@ static int SkipUntil(const char* s, size_t len, const char* delimiters) {
 
 WordScanner::Iterator& WordScanner::Iterator::operator++() {
   int len = static_cast<int>(in->size());
+
+#ifdef USE_SIMD_WHITESPACE
+  // Use SIMD to skip whitespace
+  size_t start = i + 1;
+  if (start < (size_t)len) {
+    s = start + FindNonWhitespaceSIMD(in->data() + start, len - start);
+  } else {
+    s = len;
+  }
+#else
   for (s = i + 1; s < len; s++) {
     if (!isSpace((*in)[s]))
       break;
   }
+#endif
+
   if (s >= len) {
     in = NULL;
     s = 0;
@@ -48,8 +251,13 @@ WordScanner::Iterator& WordScanner::Iterator::operator++() {
     return *this;
   }
 
+#ifdef USE_SIMD_WHITESPACE
+  // Use SIMD to find the next whitespace character
+  i = s + FindWhitespaceSIMD(in->data() + s, len - s);
+#else
   // skip until the next whitespace character
   i = s + SkipUntil(in->data() + s, len - s, "\x09\x0a\x0b\x0c\x0d ");
+#endif
   return *this;
 }
 
