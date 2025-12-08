@@ -176,20 +176,28 @@ void CharMatcher::Advance(size_t n) {
 
 WordScanner::Iterator& WordScanner::Iterator::operator++() {
   int len = static_cast<int>(in->size());
+
+  // Phase 1: Skip whitespace (find word start) using scalar loop
+  // (whitespace is most often singular, so vectorization doesn't help much)
   for (s = i + 1; s < len; s++) {
     if (!isSpace((*in)[s]))
       break;
   }
   if (s >= len) {
+    matcher_.reset();
     in = NULL;
     s = 0;
     i = 0;
     return *this;
   }
 
-  // skip until the next whitespace character
-  CharMatcher matcher(in->data() + s, len - s, "\x09\x0a\x0b\x0c\x0d ");
-  i = s + matcher.SkipUntil();
+  // Sync matcher position to word start
+  matcher_->Advance(s - matcher_->Position());
+
+  // Phase 2: Skip non-whitespace (find word end) using SkipUntil
+  size_t word_len = matcher_->SkipUntil();
+  i = s + static_cast<int>(word_len);
+
   return *this;
 }
 
@@ -204,6 +212,8 @@ WordScanner::Iterator WordScanner::begin() const {
   iter.in = &in_;
   iter.s = 0;
   iter.i = -1;
+  // Create matcher spanning entire string for reuse across iterations
+  iter.matcher_.emplace(in_.data(), in_.size(), "\x09\x0a\x0b\x0c\x0d ");
   ++iter;
   return iter;
 }

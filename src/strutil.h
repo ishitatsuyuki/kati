@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -68,6 +69,7 @@ class WordScanner {
     const std::string_view* in;
     int s;
     int i;
+    std::optional<CharMatcher> matcher_;
   };
 
   explicit WordScanner(std::string_view in);
