@@ -15,6 +15,7 @@
 #ifndef STRUTIL_H_
 #define STRUTIL_H_
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +32,12 @@ class WordScanner {
     const std::string_view* in;
     int s;
     int i;
+#ifdef __SSSE3__
+    // Cached whitespace bitmask for 64-byte block starting at block_base.
+    // Bit k is 1 if byte (block_base + k) is whitespace.
+    uint64_t ws_mask;
+    int block_base;
+#endif
   };
 
   explicit WordScanner(std::string_view in);
