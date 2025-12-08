@@ -15,9 +15,43 @@
 #ifndef STRUTIL_H_
 #define STRUTIL_H_
 
+#include <stdint.h>
+
 #include <string>
 #include <string_view>
 #include <vector>
+
+class CharMatcher {
+ public:
+  CharMatcher(const char* data, size_t len, const char* delimiters);
+
+  // Skip until next delimiter, return offset from current position.
+  // Returns remaining length if no delimiter found.
+  size_t SkipUntil();
+
+  // Advance position by n characters.
+  void Advance(size_t n);
+
+  // Get current position.
+  size_t Position() const { return pos_; }
+
+  // Check if at end.
+  bool AtEnd() const { return pos_ >= len_; }
+
+ private:
+  void UpdateBlockScalar();
+#ifdef __SSE2__
+  void UpdateBlockSSE();
+#endif
+  void UpdateBlock();
+
+  const char* data_;
+  size_t len_;
+  size_t pos_;
+  size_t block_start_;
+  uint64_t matches_;
+  const char* delimiters_;
+};
 
 class WordScanner {
  public:
