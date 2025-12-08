@@ -28,6 +28,9 @@
 #ifdef __SSE2__
 #include <emmintrin.h>
 #endif
+#ifdef __AVX2__
+#include <immintrin.h>
+#endif
 
 #include "log.h"
 
@@ -95,8 +98,45 @@ void CharMatcher::UpdateBlockSSE() {
 }
 #endif
 
+#ifdef __AVX2__
+void CharMatcher::UpdateBlockAVX2() {
+  block_start_ = pos_ & ~size_t{63};
+  matches_ = 0;
+
+  // Load null terminator check vector
+  __m256i zero = _mm256_setzero_si256();
+
+  // Process 2 x 32-byte chunks
+  for (int chunk = 0; chunk < 2; ++chunk) {
+    __m256i data = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(data_ + block_start_ + chunk * 32));
+
+    // Start with null terminator matches
+    __m256i result = _mm256_cmpeq_epi8(data, zero);
+
+    // Compare against each delimiter
+    for (const char* d = delimiters_; *d; ++d) {
+      __m256i delim = _mm256_set1_epi8(*d);
+      __m256i cmp = _mm256_cmpeq_epi8(data, delim);
+      result = _mm256_or_si256(result, cmp);
+    }
+
+    // Convert to 32-bit mask and insert into 64-bit result
+    uint32_t mask = _mm256_movemask_epi8(result);
+    matches_ |= static_cast<uint64_t>(mask) << (chunk * 32);
+  }
+}
+#endif
+
 void CharMatcher::UpdateBlock() {
-#ifdef __SSE2__
+#ifdef __AVX2__
+  // Only use AVX2 for full 64-byte blocks that don't exceed buffer
+  size_t new_block_start = pos_ & ~size_t{63};
+  if (new_block_start + 64 <= len_) {
+    UpdateBlockAVX2();
+    return;
+  }
+#elif defined(__SSE2__)
   // Only use SSE for full 64-byte blocks that don't exceed buffer
   size_t new_block_start = pos_ & ~size_t{63};
   if (new_block_start + 64 <= len_) {

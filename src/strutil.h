@@ -43,6 +43,9 @@ class CharMatcher {
 #ifdef __SSE2__
   void UpdateBlockSSE();
 #endif
+#ifdef __AVX2__
+  void UpdateBlockAVX2();
+#endif
   void UpdateBlock();
 
   const char* data_;
