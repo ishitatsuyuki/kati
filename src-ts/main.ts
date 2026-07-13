@@ -7,13 +7,21 @@
 import { Make, type MakeOptions } from "./make.ts";
 import { appendFileSync, chmodSync, existsSync, globSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { availableParallelism } from "node:os";
 import { basename, formatForCommandSubstitution, words } from "./string.ts";
 
 interface ParsedOptions extends MakeOptions {
   directory?: string;
   generateNinja: boolean;
+  generateEmptyNinja: boolean;
   regen: boolean;
   emitSandbox?: boolean;
+  ninjaDir?: string;
+  ninjaSuffix: string;
+  noNinjaPrelude: boolean;
+  numJobs: number;
+  remoteNumJobs: number;
+  useNinjaPhonyOutput: boolean;
 }
 
 function optionArgument(args: string[], index: number, prefix: string): [string, number] | undefined {
@@ -32,7 +40,13 @@ function parseArgs(args: string[]): ParsedOptions {
     makefile: "Makefile", silent: false, dryRun: false, alwaysMake: false,
     keepGoing: false, syntaxCheck: false, commandVariables: [], targets: [],
     generateNinja: false,
+    generateEmptyNinja: false,
     regen: false,
+    ninjaSuffix: "",
+    noNinjaPrelude: false,
+    numJobs: availableParallelism(),
+    remoteNumJobs: 0,
+    useNinjaPhonyOutput: false,
     werrorOverride: false,
     noBuiltinRules: false,
   };
@@ -44,7 +58,7 @@ function parseArgs(args: string[]): ParsedOptions {
   args = [...inheritedFlags, ...args];
   const ignoredWithArgument = new Set([
     "--dump_include_graph", "--dump_variable_assignment_trace", "--variable_assignment_trace_filter",
-    "--remote_num_jobs", "--ninja_suffix", "--ninja_dir", "--ignore_optional_include",
+    "--ignore_optional_include",
     "--ignore_dirty", "--no_ignore_dirty", "--writable", "--default_pool", "--cpu_profile", "--mem_profile",
   ]);
   for (let index = 0; index < args.length; index++) {
@@ -55,7 +69,13 @@ function parseArgs(args: string[]): ParsedOptions {
     } else if ((parsed = optionArgument(args, index, "-C"))) {
       options.directory = parsed[0]; index = parsed[1];
     } else if ((parsed = optionArgument(args, index, "-j"))) {
-      index = parsed[1];
+      options.numJobs = parsePositiveInteger("-j", parsed[0]); index = parsed[1];
+    } else if ((parsed = optionArgument(args, index, "--remote_num_jobs"))) {
+      options.remoteNumJobs = parsePositiveInteger("--remote_num_jobs", parsed[0]); index = parsed[1];
+    } else if ((parsed = optionArgument(args, index, "--ninja_suffix"))) {
+      options.ninjaSuffix = parsed[0]; index = parsed[1];
+    } else if ((parsed = optionArgument(args, index, "--ninja_dir"))) {
+      options.ninjaDir = parsed[0]; index = parsed[1];
     } else if ((parsed = optionArgument(args, index, "--default_pool"))) {
       options.defaultPool = parsed[0]; index = parsed[1];
     } else if (argument === "-s" || argument === "--silent") options.silent = true;
@@ -64,11 +84,15 @@ function parseArgs(args: string[]): ParsedOptions {
     else if (argument === "-k") options.keepGoing = true;
     else if (argument === "-c") options.syntaxCheck = true;
     else if (argument === "--ninja") options.generateNinja = true;
+    else if (argument === "--empty_ninja_file") options.generateEmptyNinja = true;
     else if (argument === "--regen") options.regen = true;
     else if (argument === "--gen_all_targets") options.genAllTargets = true;
     else if (argument === "--werror_overriding_commands") options.werrorOverride = true;
     else if (argument === "--no_builtin_rules") options.noBuiltinRules = true;
     else if (argument === "--no-builtin-rules") options.noBuiltinRules = true;
+    else if (argument === "--no_ninja_prelude") options.noNinjaPrelude = true;
+    else if (argument === "--use_ninja_phony_output") options.useNinjaPhonyOutput = true;
+    else if (argument === "--use_ninja_validations") options.useNinjaValidations = true;
     else if (argument === "--no-print-directory") makeFlags.push("--no-print-directory");
     else if (argument === "-O" || argument.startsWith("-O") || argument === "--output-sync" || argument.startsWith("--output-sync=")) {
       makeFlags.push(argument);
@@ -117,6 +141,12 @@ function parseArgs(args: string[]): ParsedOptions {
   return options;
 }
 
+function parsePositiveInteger(option: string, value: string): number {
+  const result = Number(value);
+  if (!Number.isInteger(result) || result <= 0) throw new Error(`Invalid ${option} flag: ${value}`);
+  return result;
+}
+
 function ninjaEscape(value: string): string {
   let result = "";
   for (const char of value) result += "$: ".includes(char) ? "$" + char : char;
@@ -125,6 +155,10 @@ function ninjaEscape(value: string): string {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function ninjaFilename(options: ParsedOptions, prefix: string, extension: string): string {
+  return `${options.ninjaDir ?? "."}/${prefix}${options.ninjaSuffix}${extension}`;
 }
 
 function translateCommand(input: string): string {
@@ -201,10 +235,13 @@ function argumentSignature(args: readonly string[]): string {
   return args.filter((argument) => argument !== "--regen").join("\0");
 }
 
-function needsRegeneration(args: readonly string[]): boolean {
-  if (!existsSync(".kati_stamp") || !existsSync("build.ninja") || !existsSync("ninja.sh")) return true;
+function needsRegeneration(args: readonly string[], options: ParsedOptions): boolean {
+  const stampFilename = ninjaFilename(options, ".kati_stamp", "");
+  if (!existsSync(stampFilename) ||
+      !existsSync(ninjaFilename(options, "build", ".ninja")) ||
+      !existsSync(ninjaFilename(options, "ninja", ".sh"))) return true;
   let stamp: RegenStamp;
-  try { stamp = JSON.parse(readFileSync(".kati_stamp", "utf8")) as RegenStamp; }
+  try { stamp = JSON.parse(readFileSync(stampFilename, "utf8")) as RegenStamp; }
   catch { return true; }
   const dirty = (message: string): boolean => { console.error(message); return true; };
   if (stamp.version !== 1) return true;
@@ -237,7 +274,7 @@ function needsRegeneration(args: readonly string[]): boolean {
   return false;
 }
 
-function writeRegenStamp(make: Make, args: readonly string[]): void {
+function writeRegenStamp(make: Make, args: readonly string[], options: ParsedOptions): void {
   const files = Object.fromEntries(make.parsedFiles.map((filename) => [filename, snapshot(filename)]));
   const extraFiles = Object.fromEntries([...make.evaluator.extraFileDeps].map((filename) => [filename, snapshot(filename)]));
   const environmentNames = new Set([...make.evaluator.usedEnvironment, ...make.evaluator.usedUndefined, "PATH"]);
@@ -252,19 +289,24 @@ function writeRegenStamp(make: Make, args: readonly string[]): void {
     fileReads,
     fileWrites: make.evaluator.fileWrites,
   };
-  writeFileSync(".kati_stamp", JSON.stringify(stamp), "utf8");
+  writeFileSync(ninjaFilename(options, ".kati_stamp", ""), JSON.stringify(stamp), "utf8");
 }
 
 function generateNinja(make: Make, options: ParsedOptions): void {
   const lines = ["# Generated by tkati", ""];
   const defaults = options.targets.length > 0 ? options.targets : make.defaultTargetName() !== undefined ? [make.defaultTargetName()!] : [];
-  if (defaults.length === 0) throw new Error("*** No targets.");
+  if (defaults.length === 0 && !options.generateEmptyNinja) throw new Error("*** No targets.");
   const roots = options.genAllTargets ? make.targetNames() : defaults;
-  lines.push("build _kati_always_build_: phony", "");
+  const nodes = make.ninjaGraph(roots);
+  if (!options.noNinjaPrelude) {
+    if (options.ninjaDir !== undefined) lines.push(`builddir = ${options.ninjaDir}`, "");
+    lines.push("pool local_pool", `  depth = ${options.numJobs}`, "");
+    if (!options.useNinjaPhonyOutput) lines.push("build _kati_always_build_: phony", "");
+  }
   let ruleId = 0;
-  for (const node of make.ninjaGraph(roots)) {
+  for (const node of options.generateEmptyNinja ? [] : nodes) {
     const prerequisites = node.prerequisites.map(ninjaEscape);
-    if (node.phony) prerequisites.unshift("_kati_always_build_");
+    if (node.phony && !options.useNinjaPhonyOutput) prerequisites.unshift("_kati_always_build_");
     const orderOnly = node.orderOnly.length > 0 ? ` || ${node.orderOnly.map(ninjaEscape).join(" ")}` : "";
     const validations = node.validations.length > 0 ? ` |@ ${node.validations.map(ninjaEscape).join(" ")}` : "";
     let rule = "phony";
@@ -291,14 +333,20 @@ function generateNinja(make: Make, options: ParsedOptions): void {
     lines.push(`build ${outputText}: ${rule}${prerequisites.length ? " " + prerequisites.join(" ") : ""}${orderOnly}${validations}`);
     if (node.pool && node.pool !== "none") lines.push(`  pool = ${node.pool}`);
     else if (!node.pool && options.defaultPool && node.commands.length > 0) lines.push(`  pool = ${options.defaultPool}`);
+    else if (!node.pool && options.remoteNumJobs > 0) lines.push("  pool = local_pool");
+    if (node.phony && options.useNinjaPhonyOutput) lines.push("  phony_output = true");
     lines.push("");
   }
-  if (defaults.length > 0) lines.push(`default ${options.genAllTargets ? ninjaEscape(make.defaultTargetName()!) : defaults.map(ninjaEscape).join(" ")}`, "");
-  writeFileSync("build.ninja", lines.join("\n"), "latin1");
-  writeFileSync("ninja.sh", "#!/bin/sh\n. ./env.sh\nexec ninja -f build.ninja \"$@\"\n", "utf8");
-  chmodSync("ninja.sh", 0o755);
-  writeFileSync("env.sh", ["#!/bin/sh", ...make.ninjaEnvironment(), ""].join("\n"), "utf8");
-  writeRegenStamp(make, process.argv.slice(2));
+  if (!options.generateEmptyNinja && defaults.length > 0) lines.push(`default ${options.genAllTargets ? ninjaEscape(make.defaultTargetName()!) : defaults.map(ninjaEscape).join(" ")}`, "");
+  const buildFilename = ninjaFilename(options, "build", ".ninja");
+  const shellFilename = ninjaFilename(options, "ninja", ".sh");
+  const envFilename = ninjaFilename(options, "env", ".sh");
+  writeFileSync(buildFilename, lines.join("\n"), "latin1");
+  const remoteJobs = options.remoteNumJobs > 0 ? `-j${options.remoteNumJobs} ` : "";
+  writeFileSync(shellFilename, `#!/bin/sh\n. ${envFilename}\nexec ninja -f ${buildFilename} ${remoteJobs}\"$@\"\n`, "utf8");
+  chmodSync(shellFilename, 0o755);
+  writeFileSync(envFilename, ["#!/bin/sh", ...make.ninjaEnvironment(), ""].join("\n"), "utf8");
+  writeRegenStamp(make, process.argv.slice(2), options);
 }
 
 let activeMake: Make | undefined;
@@ -306,7 +354,7 @@ try {
   const rawArgs = process.argv.slice(2);
   const options = parseArgs(rawArgs);
   if (options.directory) process.chdir(options.directory);
-  if (options.generateNinja && options.regen && !needsRegeneration(rawArgs)) {
+  if (options.generateNinja && options.regen && !needsRegeneration(rawArgs, options)) {
     process.exitCode = 0;
   } else {
     activeMake = new Make(options);

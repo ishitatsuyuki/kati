@@ -75,6 +75,7 @@ export interface MakeOptions {
   werrorFind?: boolean;
   defaultPool?: string;
   genAllTargets?: boolean;
+  useNinjaValidations?: boolean;
 }
 
 export interface NinjaGraphNode {
@@ -916,6 +917,9 @@ export class Make {
           }
         }
         const validations = [...words(this.evaluator.expandVariable(".KATI_VALIDATIONS"))].map(trimLeadingCurdir);
+        if (validations.length > 0 && !this.options.useNinjaValidations) {
+          throw new Error("*** .KATI_VALIDATIONS not allowed without --use_ninja_validations");
+        }
         const pool = this.evaluator.expandVariable(".KATI_NINJA_POOL");
         const doubleRules = (this.rules.get(target) ?? []).filter((rule) => rule.doubleColon);
         const recipe = doubleRules.length > 1 ? doubleRules.flatMap((rule) => rule.commands) : found.rule.commands;
