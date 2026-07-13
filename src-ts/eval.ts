@@ -34,6 +34,7 @@ export interface Variable {
   deprecated?: string;
   obsolete?: string;
   visibility?: string[];
+  exported?: boolean;
 }
 
 export interface RegenShellResult {
@@ -241,12 +242,15 @@ builtin("shell", (args, ev) => {
 });
 builtin("call", (args, ev) => {
   const name = trimSpace(ev.expand(args[0] ?? ""));
+  // Capture every argument before installing the numbered parameters. Nested
+  // calls must not overwrite an outer $1 while a later argument still uses it.
+  const expandedArgs = args.slice(1).map((argument) => ev.expand(argument));
   const saved = new Map<string, Variable | undefined>();
   let index = 1;
-  for (; index < args.length; index++) {
+  for (; index <= expandedArgs.length; index++) {
     const symbol = String(index);
     saved.set(symbol, ev.getVariable(symbol));
-    ev.setVariable(symbol, { value: ev.expand(args[index]!), flavor: "simple", origin: "automatic" }, true);
+    ev.setVariable(symbol, { value: expandedArgs[index - 1]!, flavor: "simple", origin: "automatic" }, true);
   }
   for (;; index++) {
     const symbol = String(index);
@@ -415,12 +419,12 @@ export class Evaluator {
     return this.variables.get(intern(name));
   }
 
-  setVariable(name: string, variable: Variable, force = false): void {
+  setVariable(name: string, variable: Variable, force = false, targetSpecific = false): void {
     const symbol = intern(name);
     const previous = this.variables.get(symbol);
     if (!force && previous?.readonly) throw new Error(`*** cannot assign to readonly variable: ${name}`);
-    if (!force && previous?.obsolete !== undefined) throw new Error(`*** ${name} is obsolete${previous.obsolete}.`);
-    if (!force && previous?.deprecated !== undefined) {
+    if (!force && !targetSpecific && previous?.obsolete !== undefined) throw new Error(`*** ${name} is obsolete${previous.obsolete}.`);
+    if (!force && !targetSpecific && previous?.deprecated !== undefined) {
       this.warning(`${name} has been deprecated${previous.deprecated}.`);
       variable.deprecated = previous.deprecated;
     }
@@ -433,6 +437,10 @@ export class Evaluator {
     const symbol = intern(name);
     if (variable) this.variables.set(symbol, variable);
     else this.variables.delete(symbol);
+  }
+
+  targetExportVariables(): [string, Variable][] {
+    return [...this.variables].filter(([, variable]) => variable.exported !== undefined);
   }
 
   expandVariable(name: string): string {
@@ -540,7 +548,7 @@ export class Evaluator {
       return implementation(splitArguments(body, builtinArities.get(functionName) ?? 0), this);
     }
     const expanded = this.expand(reference);
-    if (expanded.length === 2 && (expanded[1] === "D" || expanded[1] === "F")) {
+    if (expanded.length === 2 && "@%<^+?*".includes(expanded[0]!) && (expanded[1] === "D" || expanded[1] === "F")) {
       if (this.deferAutomatic && !this.getVariable(expanded[0]!)) return `$(${expanded})`;
       const value = this.expandVariable(expanded[0]!);
       return [...words(value)].map((word) => expanded[1] === "D" ? dirname(word) : basename(word)).join(" ");

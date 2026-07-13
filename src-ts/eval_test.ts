@@ -37,3 +37,19 @@ test("computed names and substitution references", () => {
   evaluator.setVariable("FILES", { value: "a.c b.c", flavor: "simple", origin: "file" });
   assert.equal(evaluator.expand("$($(name):.c=.o)"), "a.o b.o");
 });
+
+test("nested calls capture outer numbered arguments before rebinding", () => {
+  const evaluator = new Evaluator({});
+  evaluator.setVariable("inner", { value: "[$(1)|$(2)]", flavor: "recursive", origin: "file" });
+  evaluator.setVariable("outer", {
+    value: "$(call inner,prefix $(1),suffix $(2))", flavor: "recursive", origin: "file",
+  });
+  assert.equal(evaluator.expand("$(call outer,left,right)"), "[prefix left|suffix right]");
+});
+
+test("ordinary names ending in D or F are not automatic-variable suffixes", () => {
+  const evaluator = new Evaluator({});
+  evaluator.setVariable("LD", { value: "ld", flavor: "simple", origin: "file" });
+  evaluator.setVariable("RF", { value: "regular", flavor: "simple", origin: "file" });
+  assert.equal(evaluator.expand("$(LD) $(RF)"), "ld regular");
+});

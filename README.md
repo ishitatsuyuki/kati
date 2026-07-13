@@ -43,6 +43,32 @@ $ make tkati_test
 `tkati` supports direct execution, Ninja generation, regeneration stamps, and
 all-target Ninja generation. The Go harness compares each mode against cKati.
 
+Direct mode can also build the Linux kernel recursively. For a small x86 smoke
+build using a separate output directory:
+
+```
+$ cd /path/to/linux
+$ /path/to/kati/tkati O=/tmp/tkati-linux tinyconfig
+$ /path/to/kati/tkati O=/tmp/tkati-linux vmlinux
+```
+
+An external module can be prepared and built with `M=`. Until included
+makefiles are automatically remade, run `syncconfig` explicitly after changing
+`.config`:
+
+```
+$ scripts/config --file /tmp/tkati-linux/.config --enable MODULES
+$ /path/to/kati/tkati O=/tmp/tkati-linux olddefconfig
+$ /path/to/kati/tkati O=/tmp/tkati-linux syncconfig
+$ /path/to/kati/tkati O=/tmp/tkati-linux modules_prepare
+$ /path/to/kati/tkati O=/tmp/tkati-linux M=/path/to/module modules
+```
+
+Kernel support is experimental and intentionally uses direct mode: recursive
+submakes are not representable by Kati's Ninja generator. The `tinyconfig`
+kernel build is tested; optional trees such as selftests that explicitly use
+`.SECONDEXPANSION` remain outside the tested subset.
+
 Make text and expanded values are ordinary JavaScript strings. This lets the
 JavaScript engine use its native cons-string/rope representation for repeated
 concatenation instead of maintaining a separate rope type. Symbol and variable

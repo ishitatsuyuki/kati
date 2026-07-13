@@ -32,6 +32,7 @@ interface Rule {
   doubleColon: boolean;
   targetPattern?: string;
   staticDeps?: { targetPattern: string; prerequisites: string[]; orderOnly: string[] }[];
+  staticDepsFirst?: boolean;
   suffixRule?: boolean;
   pendingOverride?: boolean;
 }
@@ -52,6 +53,7 @@ export interface MakeOptions {
   keepGoing: boolean;
   syntaxCheck: boolean;
   commandVariables: readonly string[];
+  makeFlags?: readonly string[];
   targets: readonly string[];
   werrorOverride?: boolean;
   noBuiltinRules?: boolean;
@@ -167,6 +169,7 @@ export class Make {
   private currentRule: Rule | undefined;
   private readonly building = new Set<string>();
   private readonly built = new Set<string>();
+  private executedCommands = 0;
   private readonly conditionalStack: Conditional[] = [];
 
   constructor(options: MakeOptions) {
@@ -184,8 +187,10 @@ export class Make {
   private bootstrap(): void {
     const defaults: Record<string, string> = {
       CC: "cc", CXX: "g++", AR: "ar", MAKE_VERSION: "4.2.1", KATI: "ckati",
-      SHELL: "/bin/sh", MAKE: `${process.execPath} ${process.argv[1]}${this.options.silent ? " -s" : ""}`, CURDIR: process.cwd(), MAKEFILE_LIST: "",
+      SHELL: "/bin/sh", MAKE: `${process.execPath} ${process.argv[1]}`, CURDIR: process.cwd(), MAKEFILE_LIST: "",
       MAKECMDGOALS: this.options.targets.join(" "),
+      MAKELEVEL: process.env.MAKELEVEL ?? "0",
+      ".FEATURES": "else-if order-only output-sync shortest-stem target-specific",
     };
     for (const [name, value] of Object.entries(defaults)) {
       if (!this.evaluator.getVariable(name) || name === "SHELL") {
@@ -193,9 +198,9 @@ export class Make {
         this.evaluator.setVariable(name, { value, flavor, origin: "default" }, true);
       }
     }
-    for (const assignment of words(process.env.MAKEFLAGS ?? "")) {
-      if (assignment.includes("=")) this.assign(assignment, "command line", { file: "<command line>", line: 1 });
-    }
+    this.evaluator.setVariable("MAKEFLAGS", {
+      value: (this.options.makeFlags ?? []).join(" "), flavor: "simple", origin: "default",
+    }, true);
     for (const assignment of this.options.commandVariables) this.assign(assignment, "command line", { file: "<command line>", line: 1 });
     if (!this.options.noBuiltinRules) {
       this.parseText(
@@ -231,6 +236,7 @@ export class Make {
 
   parseText(text: string, filename: string, lineOffset = 0): void {
     const lines = logicalLines(text);
+    const conditionalDepth = this.conditionalStack.length;
     let define: { name: string; operator: string; start: number; lines: string[]; origin: VariableOrigin; depth: number } | undefined;
     for (let sourceIndex = 0; sourceIndex < lines.length; sourceIndex++) {
       const source = lines[sourceIndex]!;
@@ -362,7 +368,9 @@ export class Make {
       this.parseRule(line, location, lines[sourceIndex + 1]?.command ?? false);
     }
     if (define) throw new Error(`${filename}:${define.start}: *** missing 'endef', unterminated 'define'.`);
-    if (this.conditionalStack.length > 0) throw new Error(`${filename}:${lines.at(-1)?.line ?? 1}: *** missing 'endif'.`);
+    if (this.conditionalStack.length !== conditionalDepth) {
+      throw new Error(`${filename}:${lines.at(-1)?.line ?? 1}: *** missing 'endif'.`);
+    }
   }
 
   private active(): boolean {
@@ -397,6 +405,10 @@ export class Make {
       return true;
     }
     const parentActive = this.active();
+    if (!parentActive) {
+      this.conditionalStack.push({ parentActive: false, condition: false, active: false, seenElse: false });
+      return true;
+    }
     let condition = false;
     if (directive === "ifdef" || directive === "ifndef") {
       const expandedName = this.evaluator.expand(trimRightSpace(argument));
@@ -444,7 +456,7 @@ export class Make {
     return colon === undefined || equal <= colon + 1;
   }
 
-  private assign(line: string, origin: VariableOrigin, location: Location): string {
+  private assign(line: string, origin: VariableOrigin, location: Location, targetSpecific = false): string {
     const match = /^(.*?)(::=|:=|\?=|\+=|!=|=)([\s\S]*)$/.exec(line);
     if (!match) throw new Error(`${location.file}:${location.line}: *** malformed assignment.`);
     const name = internName(this.evaluator.expand(trimRightSpace(match[1]!)));
@@ -460,7 +472,7 @@ export class Make {
       this.evaluator.setVariable(name, {
         ...previous, value: previous.value + " " + addition,
         file: location.file, line: location.line,
-      });
+      }, false, targetSpecific);
       return name;
     }
     let value = raw;
@@ -472,7 +484,7 @@ export class Make {
       value = this.evaluator.shell(raw);
       flavor = "recursive";
     }
-    this.evaluator.setVariable(name, { value, flavor, origin, file: location.file, line: location.line });
+    this.evaluator.setVariable(name, { value, flavor, origin, file: location.file, line: location.line }, false, targetSpecific);
     if (finalAssignment) this.evaluator.getVariable(name)!.readonly = true;
     if (name === ".KATI_READONLY") {
       for (const readonlyName of words(this.evaluator.expandVariable(name))) {
@@ -508,11 +520,14 @@ export class Make {
       let targetAssignment = trimLeftSpace(line.slice(rawColon + (doubleColonAssignment ? 2 : 1)));
       let force = false;
       let privateDirective = false;
+      let exportDirective: boolean | undefined;
       for (;;) {
-        const directive = /^(override|private)(?:\s+|$)/.exec(targetAssignment);
+        const directive = /^(override|private|export|unexport)(?:\s+|$)/.exec(targetAssignment);
         if (!directive) break;
         if (directive[1] === "override") force = true;
         if (directive[1] === "private") privateDirective = true;
+        if (directive[1] === "export") exportDirective = true;
+        if (directive[1] === "unexport") exportDirective = false;
         targetAssignment = trimLeftSpace(targetAssignment.slice(directive[0].length));
       }
       const assignmentOnly = targetAssignment;
@@ -550,12 +565,10 @@ export class Make {
             };
             appendGlobal = true;
           } else {
-            if (match[2] !== "?=" && !entries.some((entry) => entry.name === variableName)) {
-              this.evaluator.restoreVariable(variableName, undefined);
-            }
-            this.assign(assignmentOnly, force ? "override" : "file", location);
+            this.assign(assignmentOnly, force ? "override" : "file", location, true);
             variable = { ...this.evaluator.getVariable(variableName)! };
           }
+          if (exportDirective !== undefined) variable.exported = exportDirective;
           for (const [name, saved] of scoped) this.evaluator.restoreVariable(name, saved);
           this.evaluator.restoreVariable(variableName, previous);
           entries.push({ name: variableName, variable, force, private: privateDirective, appendGlobal });
@@ -565,7 +578,7 @@ export class Make {
               targets: rawTargets, prerequisites: [], orderOnly: [], commands: [], location, doubleColon: false,
             };
             this.rules.set(target, [placeholder]);
-            if (!this.defaultTarget && !target.startsWith(".")) this.defaultTarget = target;
+            if (this.defaultTarget === undefined && !target.startsWith(".")) this.defaultTarget = target;
             this.currentRule = placeholder;
           } else if (!target.includes("%")) {
             this.currentRule = this.rules.get(target)![0];
@@ -631,17 +644,17 @@ export class Make {
     }
     const prerequisites = [...words(normal)].map(trimLeadingCurdir);
     const orderPrerequisites = [...words(orderOnly)].map(trimLeadingCurdir);
-    // Old-style suffix rules are equivalent to a single-output pattern rule.
-    let suffixRule = false;
+    // Old-style suffix rules are also retained as literal explicit rules. This
+    // matters for names such as Kbuild's `.module-common.o`: GNU Make and the
+    // original Kati register suffix behavior without discarding that target.
+    let suffixPattern: { target: string; prerequisite: string } | undefined;
     if (targets.length === 1 && /^\.[^/.]+\.[^/.]+$/.test(targets[0]!)) {
-      suffixRule = true;
       if (this.options.werrorSuffixRules) throw new Error(`${location.file}:${location.line}: *** suffix rules are obsolete: ${targets[0]}`);
       if (this.options.warnSuffixRules) console.error(`${location.file}:${location.line}: warning: suffix rules are deprecated: ${targets[0]}`);
       const split = targets[0]!.indexOf(".", 1);
       const source = targets[0]!.slice(0, split);
       const destination = targets[0]!.slice(split);
-      targets[0] = "%" + destination;
-      prerequisites.unshift("%" + source);
+      suffixPattern = { target: "%" + destination, prerequisite: "%" + source };
     }
     const rule: Rule = {
       targets,
@@ -649,14 +662,15 @@ export class Make {
       orderOnly: targetPattern ? [] : orderPrerequisites,
       commands: [], location, doubleColon,
       staticDeps: targetPattern ? [{ targetPattern, prerequisites, orderOnly: orderPrerequisites }] : undefined,
-      suffixRule,
+      staticDepsFirst: !!targetPattern && hasFollowingRecipe,
+      suffixRule: false,
     };
     if (targets.includes(".SUFFIXES") && prerequisites.length === 0) {
       for (let index = this.patternRules.length - 1; index >= 0; index--) {
         if (this.patternRules[index]!.suffixRule) this.patternRules.splice(index, 1);
       }
     }
-    if (!suffixRule && targets.some((target) => target.includes("%"))) {
+    if (!suffixPattern && targets.some((target) => target.includes("%"))) {
       const patternName = targets.find((target) => target.includes("%"))!;
       if (this.options.werrorImplicitRules) throw new Error(`${location.file}:${location.line}: *** implicit rules are obsolete: ${patternName}`);
       if (this.options.warnImplicitRules) console.error(`${location.file}:${location.line}: warning: implicit rules are deprecated: ${patternName}`);
@@ -670,6 +684,18 @@ export class Make {
     if (semicolon !== undefined) {
       rule.commands.push({ text: trimLeftSpace(expanded.slice(rhsStart + semicolon + 1)), location });
     }
+    if (suffixPattern) {
+      this.patternRules.push({
+        ...rule,
+        targets: [suffixPattern.target],
+        prerequisites: [suffixPattern.prerequisite],
+        orderOnly: [],
+        commands: rule.commands,
+        staticDeps: undefined,
+        staticDepsFirst: false,
+        suffixRule: true,
+      });
+    }
     for (const target of targets) {
       if (target === ".POSIX") this.evaluator.posix = true;
       if (target === ".PHONY") {
@@ -680,7 +706,7 @@ export class Make {
         this.currentRule = rule;
         continue;
       }
-      if (!this.defaultTarget && !target.startsWith(".") && !target.includes("%")) this.defaultTarget = target;
+      if (this.defaultTarget === undefined && !target.startsWith(".") && !target.includes("%")) this.defaultTarget = target;
       if (target.includes("%")) {
         const same = this.patternRules.find((candidate) =>
           candidate.targets.length === rule.targets.length &&
@@ -706,6 +732,7 @@ export class Make {
             prerequisites: [...entry.prerequisites],
             orderOnly: [...entry.orderOnly],
           })),
+          staticDepsFirst: rule.staticDepsFirst,
           commands: rule.commands,
         } : rule;
         const existing = this.rules.get(target) ?? [];
@@ -714,15 +741,28 @@ export class Make {
         }
         if (!doubleColon && existing.length > 0) {
           const main = existing[0]!;
-          if (main.commands.length > 0) {
+          const recipeRule = targetRule.commands.length > 0 || hasFollowingRecipe;
+          if (recipeRule) {
             main.prerequisites.unshift(...targetRule.prerequisites);
             main.orderOnly.unshift(...targetRule.orderOnly);
           } else {
             main.prerequisites.push(...targetRule.prerequisites);
             main.orderOnly.push(...targetRule.orderOnly);
           }
-          if (targetRule.staticDeps) (main.staticDeps ??= []).unshift(...targetRule.staticDeps);
+          if (targetRule.staticDeps) {
+            if (recipeRule) (main.staticDeps ??= []).unshift(...targetRule.staticDeps);
+            else (main.staticDeps ??= []).push(...targetRule.staticDeps);
+            if (recipeRule) main.staticDepsFirst = true;
+          } else if (recipeRule) {
+            main.staticDepsFirst = false;
+          }
           else if (main.staticDeps && targetRule.prerequisites.length > 0) main.staticDeps.reverse();
+          if (suffixPattern && recipeRule && main.commands.length > 0) {
+            // Suffix-rule recipes replace earlier suffix-rule recipes without
+            // the explicit-rule override diagnostic.
+            main.commands.length = 0;
+            main.pendingOverride = false;
+          }
           if (targetRule.commands.length > 0 || (rule.targets.length > 1 && hasFollowingRecipe)) main.commands = targetRule.commands;
           else if (main.commands.length > 0) main.pendingOverride = true;
           this.currentRule = main;
@@ -737,13 +777,14 @@ export class Make {
 
   run(): number {
     if (this.options.syntaxCheck) return 0;
-    const targets = this.options.targets.length > 0 ? this.options.targets : this.defaultTarget ? [this.defaultTarget] : [];
+    const targets = this.options.targets.length > 0 ? this.options.targets : this.defaultTarget !== undefined ? [this.defaultTarget] : [];
     if (targets.length === 0) throw new Error("*** No targets.");
     let status = 0;
     for (const target of targets) {
       try {
-        const didWork = this.build(target);
-        if (!didWork) console.log(`Nothing to be done for '${target}'.`);
+        const before = this.executedCommands;
+        this.build(target);
+        if (this.executedCommands === before) console.log(`Nothing to be done for '${target}'.`);
       }
       catch (error) {
         status = 1;
@@ -809,7 +850,7 @@ export class Make {
     }
     if ((this.options.writable?.length ?? 0) > 0) {
       for (const [target, rules] of this.rules) {
-        if (this.phony.has(target) || this.options.writable!.some((prefix) => target.startsWith(prefix)) || existsSync(target)) continue;
+        if (target.startsWith(".") || this.phony.has(target) || this.options.writable!.some((prefix) => target.startsWith(prefix)) || existsSync(target)) continue;
         const rule = rules[0]!;
         if (rule.commands.length > 0 || rule.prerequisites.length > 0) report(rule.commands[0]?.location ?? rule.location, `writing to readonly directory: '${target}'`, !!this.options.werrorWritable);
       }
@@ -931,7 +972,7 @@ export class Make {
           while (text[0] === "@" || text[0] === "-" || text[0] === "+") {
             if (text[0] === "@") echo = false;
             if (text[0] === "-") ignoreError = true;
-            text = text.slice(1);
+            text = trimLeftSpace(text.slice(1));
           }
           return [{ text, echo, ignoreError }];
         });
@@ -972,8 +1013,12 @@ export class Make {
       }
       const resolved = explicit.staticDeps ? {
         ...explicit,
-        prerequisites: [...explicit.prerequisites, ...staticPrerequisites],
-        orderOnly: [...explicit.orderOnly, ...staticOrderOnly],
+        prerequisites: explicit.staticDepsFirst
+          ? [...staticPrerequisites, ...explicit.prerequisites]
+          : [...explicit.prerequisites, ...staticPrerequisites],
+        orderOnly: explicit.staticDepsFirst
+          ? [...staticOrderOnly, ...explicit.orderOnly]
+          : [...explicit.orderOnly, ...staticOrderOnly],
       } : explicit;
       if (explicit.commands.length > 0 || explicit.staticDeps) return { rule: resolved, stem: staticStem };
       const implicit = this.findPatternRule(target);
@@ -1000,11 +1045,13 @@ export class Make {
     const candidates: { rule: Rule; stem: string; order: number }[] = [];
     let order = 0;
     for (const rule of this.patternRules) {
+      if (rule.commands.length === 0) continue;
       for (const candidate of rule.targets) {
         const pattern = new Pattern(candidate);
         if (pattern.matches(target)) {
           const stem = pattern.stem(target);
-          const viable = rule.prerequisites.every((value) => this.canMake(value.replaceAll("%", stem), new Set([target])));
+          const viable = rule.prerequisites.every((value) =>
+            this.canMake(value.replaceAll("%", stem), new Set([target]), new Set([rule])));
           if (viable) candidates.push({ rule, stem, order });
         }
         order++;
@@ -1017,19 +1064,34 @@ export class Make {
     return found ? { rule: found.rule, stem: found.stem } : undefined;
   }
 
-  private canMake(target: string, seen: Set<string>): boolean {
-    if (existsSync(target) || this.rules.has(target)) return true;
+  private canMake(target: string, seen: Set<string>, usedRules: Set<Rule>): boolean {
+    if (existsSync(target) || this.resolveVpath(target) !== target || this.rules.has(target)) return true;
     if (seen.has(target)) return false;
     seen.add(target);
     for (const rule of this.patternRules) {
+      if (usedRules.has(rule) || rule.commands.length === 0) continue;
       for (const candidate of rule.targets) {
         const pattern = new Pattern(candidate);
         if (!pattern.matches(target)) continue;
         const stem = pattern.stem(target);
-        if (rule.prerequisites.every((value) => this.canMake(value.replaceAll("%", stem), new Set(seen)))) return true;
+        const nestedRules = new Set(usedRules);
+        nestedRules.add(rule);
+        if (rule.prerequisites.every((value) =>
+          this.canMake(value.replaceAll("%", stem), new Set(seen), nestedRules))) return true;
       }
     }
     return false;
+  }
+
+  private resolveVpath(target: string): string {
+    if (target.startsWith("/") || existsSync(target) || this.rules.has(target)) return target;
+    for (const entry of words(this.evaluator.expandVariable("VPATH"))) {
+      for (const directory of entry.split(":").filter(Boolean)) {
+        const candidate = `${directory.replace(/\/$/, "")}/${target}`;
+        if (existsSync(candidate)) return candidate;
+      }
+    }
+    return target;
   }
 
   private build(target: string, neededBy?: string): boolean {
@@ -1046,14 +1108,12 @@ export class Make {
         let work = false;
         for (const rule of doubleRules) {
           const prerequisites = rule.prerequisites;
-          for (const prerequisite of [...prerequisites, ...rule.orderOnly]) {
-            work = this.build(prerequisite, target) || work;
-          }
+          work = this.buildInheritedPrerequisites(target, scoped, [...prerequisites, ...rule.orderOnly]) || work;
           const needed = rule.prerequisites.length === 0 || this.phony.has(target) || !existsSync(target) ||
             rule.prerequisites.some((value) => existsSync(value) && (!existsSync(target) || statSync(value).mtimeMs > statSync(target).mtimeMs));
           if (needed) {
             this.execute(rule.commands, target, prerequisites, rule.orderOnly, "");
-            work = work || rule.commands.length > 0;
+            work = true;
           }
         }
         this.built.add(target);
@@ -1061,7 +1121,7 @@ export class Make {
       }
       const found = this.findRule(target);
       if (!found) {
-        if (this.phony.has(target) || (this.options.topLevelPhony && !this.rules.has(target))) { this.built.add(target); return false; }
+        if (this.phony.has(target) || (this.options.topLevelPhony && !this.rules.has(target))) { this.built.add(target); return true; }
         for (const [owner, entries] of this.targetVariables) {
           if (entries.some((entry) => entry.name === ".KATI_IMPLICIT_OUTPUTS" && [...words(entry.variable.value)].includes(target))) {
             const work = this.build(owner, neededBy);
@@ -1078,12 +1138,10 @@ export class Make {
         throw new Error(`*** No rule to make target '${target}'${neededBy ? `, needed by '${neededBy}'` : ""}.`);
       }
       const { rule, stem } = found;
-      const prerequisites = rule.prerequisites.map((value) => value.replaceAll("%", stem));
-      const orderOnly = rule.orderOnly.map((value) => value.replaceAll("%", stem));
+      const prerequisites = rule.prerequisites.map((value) => this.resolveVpath(value.replaceAll("%", stem)));
+      const orderOnly = rule.orderOnly.map((value) => this.resolveVpath(value.replaceAll("%", stem)));
       let dependencyWork = false;
-      for (const prerequisite of [...prerequisites, ...orderOnly]) {
-        dependencyWork = this.build(prerequisite, target) || dependencyWork;
-      }
+      dependencyWork = this.buildInheritedPrerequisites(target, scoped, [...prerequisites, ...orderOnly]);
       let needed = this.options.alwaysMake || this.phony.has(target) || !existsSync(target);
       if (!needed && existsSync(target)) {
         const targetTime = statSync(target).mtimeMs;
@@ -1094,14 +1152,29 @@ export class Make {
         for (const output of rule.targets) this.built.add(output.replaceAll("%", stem));
       }
       this.built.add(target);
-      return dependencyWork || (needed && rule.commands.length > 0);
+      return dependencyWork || needed;
     } finally {
       for (const [name, variable] of scoped) this.evaluator.restoreVariable(name, variable);
       this.building.delete(target);
     }
   }
 
-  private applyTargetVariables(target: string): Map<string, Variable | undefined> {
+  private buildInheritedPrerequisites(
+    target: string, targetScope: Map<string, Variable | undefined>, prerequisites: readonly string[],
+  ): boolean {
+    for (const [name, variable] of targetScope) this.evaluator.restoreVariable(name, variable);
+    const inheritedScope = this.applyTargetVariables(target, false);
+    let work = false;
+    try {
+      for (const prerequisite of prerequisites) work = this.build(prerequisite, target) || work;
+      return work;
+    } finally {
+      for (const [name, variable] of inheritedScope) this.evaluator.restoreVariable(name, variable);
+      this.applyTargetVariables(target);
+    }
+  }
+
+  private applyTargetVariables(target: string, includePrivate = true): Map<string, Variable | undefined> {
     const assignments: TargetVariable[] = [];
     for (const [pattern, variables] of this.targetVariables) {
       if (pattern.includes("%") && new Pattern(pattern).matches(target)) assignments.push(...variables);
@@ -1109,6 +1182,7 @@ export class Make {
     assignments.push(...(this.targetVariables.get(target) ?? []));
     const saved = new Map<string, Variable | undefined>();
     for (const assignment of assignments) {
+      if (!includePrivate && assignment.private) continue;
       if (!saved.has(assignment.name)) saved.set(assignment.name, this.evaluator.getVariable(assignment.name));
       if (assignment.appendGlobal) {
         const base = this.evaluator.expandVariable(assignment.name);
@@ -1162,23 +1236,38 @@ export class Make {
       for (const { command, text: expandedText } of expandedCommands) {
         let text = trimLeftSpace(expandedText);
         if (trimSpace(text) === "") continue;
+        this.executedCommands++;
         let silent = this.options.silent;
         let ignore = false;
         while (text[0] === "@" || text[0] === "-" || text[0] === "+") {
           if (text[0] === "@") silent = true;
           if (text[0] === "-") ignore = true;
-          text = text.slice(1);
+          text = trimLeftSpace(text.slice(1));
         }
         if (!silent || this.options.dryRun) writeSync(1, text + "\n");
         if (this.options.dryRun) continue;
         const environment = { ...process.env };
+        // Variables inherited from the environment retain GNU Make's export
+        // attribute even when a makefile assigns them a new value.
+        for (const name of Object.keys(process.env)) {
+          const variable = this.evaluator.getVariable(name);
+          if (variable) environment[name] = this.evaluator.expandVariable(name);
+          else delete environment[name];
+        }
+        environment.MAKEFLAGS = this.evaluator.expandVariable("MAKEFLAGS");
+        environment.MAKELEVEL = String(Number(this.evaluator.expandVariable("MAKELEVEL") || "0") + 1);
         for (const [name, exported] of this.exports) {
           if (exported) environment[name] = this.evaluator.expandVariable(name);
+          else delete environment[name];
+        }
+        for (const [name, variable] of this.evaluator.targetExportVariables()) {
+          if (variable.exported) environment[name] = this.evaluator.expandVariable(name);
           else delete environment[name];
         }
         const result = spawnSync(this.evaluator.expandVariable("SHELL") || "/bin/sh", [this.evaluator.posix ? "-ec" : "-c", text], {
           env: environment, stdio: "inherit",
         });
+        if (result.error) console.error(result.error.message);
         if ((result.status ?? 127) !== 0 && ignore && process.env.TKATI_NINJA_CHILD !== "1") console.error(`[${target}] Error ${result.status ?? 127} (ignored)`);
         if ((result.status ?? 127) !== 0 && !ignore) {
           if (process.env.TKATI_NINJA_CHILD === "1") throw new Error("__silent__");
