@@ -34,6 +34,7 @@ import (
 var ninja bool
 var genAllTargets bool
 var rkati bool
+var tkati bool
 
 func init() {
 	// suppress GNU make jobserver magic when calling "make"
@@ -44,6 +45,11 @@ func init() {
 	flag.BoolVar(&ninja, "ninja", false, "use ninja")
 	flag.BoolVar(&genAllTargets, "all", false, "use --gen_all_targets")
 	flag.BoolVar(&rkati, "rkati", false, "compare rkati against ckati")
+	flag.BoolVar(&tkati, "tkati", false, "compare tkati against ckati")
+}
+
+func testingPort() bool {
+	return rkati || tkati
 }
 
 type normalization struct {
@@ -190,7 +196,9 @@ func runKati(t *testing.T, test, dir string, silent bool, rust bool, tc string) 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var kati string
-	if rust {
+	if tkati && rust {
+		kati = "../../../tkati"
+	} else if rust {
 		kati = "../../../target/debug/rkati"
 	} else {
 		kati = "../../../ckati"
@@ -249,7 +257,9 @@ func runKatiInScript(t *testing.T, script, dir string, isNinjaTest bool, rust bo
 	}
 
 	var kati string
-	if rust {
+	if tkati && rust {
+		kati = "../../../tkati"
+	} else if rust {
 		kati = "../../../target/debug/rkati"
 	} else {
 		kati = "../../../ckati"
@@ -386,9 +396,13 @@ func TestKati(t *testing.T) {
 	if _, err := os.Stat("ckati"); err != nil {
 		t.Fatalf("ckati must be built before testing: %s", err)
 	}
-	if rkati {
-		if _, err := os.Stat("target/debug/rkati"); err != nil {
-			t.Fatalf("rkati must be built before testing: %s", err)
+	if testingPort() {
+		port := "target/debug/rkati"
+		if tkati {
+			port = "tkati"
+		}
+		if _, err := os.Stat(port); err != nil {
+			t.Fatalf("%s must be built before testing: %s", port, err)
 		}
 	}
 	if ninja {
@@ -429,7 +443,7 @@ func TestKati(t *testing.T) {
 			if err := os.MkdirAll(outKati, 0777); err != nil {
 				t.Fatal(err)
 			}
-			if rkati {
+			if testingPort() {
 				if err := os.MkdirAll(outRKati, 0777); err != nil {
 					t.Fatal(err)
 				}
@@ -454,7 +468,7 @@ func TestKati(t *testing.T) {
 					os.Symlink("../../../testcase/submake", filepath.Join(dir, "submake"))
 				}
 				setup(outKati)
-				if rkati {
+				if testingPort() {
 					setup(outRKati)
 				} else {
 					setup(outMake)
@@ -465,7 +479,7 @@ func TestKati(t *testing.T) {
 				isSilent := strings.HasPrefix(name, "submake_")
 
 				for _, tc := range testcases {
-					if !rkati {
+					if !testingPort() {
 						expected[tc] = runMake(t, nil, outMake, ninja || isSilent, tc)
 						expectedFiles[tc] = outputFiles(t, outMake)
 					} else {
@@ -476,7 +490,7 @@ func TestKati(t *testing.T) {
 				}
 
 				for _, tc := range testcases {
-					if rkati {
+					if testingPort() {
 						got[tc] = runKati(t, name, outRKati, isSilent, true, tc)
 						gotFiles[tc] = outputFiles(t, outRKati)
 					} else {
@@ -492,14 +506,14 @@ func TestKati(t *testing.T) {
 
 				scriptName := "../../../testcase/" + name
 
-				if rkati {
+				if testingPort() {
 					expected[""] = runKatiInScript(t, scriptName, outKati, isNinjaTest, false)
 				} else {
 					expected[""] = runMake(t, []string{"bash", scriptName}, outMake, isNinjaTest, "")
 				}
 				expectedFailures[""] = isExpectedFailure(c, "")
 
-				if rkati {
+				if testingPort() {
 					got[""] = runKatiInScript(t, scriptName, outRKati, isNinjaTest, true)
 				} else {
 					got[""] = runKatiInScript(t, scriptName, outKati, isNinjaTest, false)
@@ -508,15 +522,19 @@ func TestKati(t *testing.T) {
 
 			check := func(t *testing.T, m, k string, mFiles, kFiles []string, expectFail bool) {
 				var a, b string
-				if rkati {
+				if testingPort() {
 					a = "ckati"
-					b = "rkati"
+					if tkati {
+						b = "tkati"
+					} else {
+						b = "rkati"
+					}
 				} else {
 					a = "Make"
 					b = "Kati"
 				}
 
-				if !rkati && strings.Contains(m, "FAIL") {
+				if !testingPort() && strings.Contains(m, "FAIL") {
 					t.Fatalf("%s returned 'FAIL':\n%q", a, m)
 				}
 
@@ -526,7 +544,7 @@ func TestKati(t *testing.T) {
 					diffs = dmp.DiffCleanupSemantic(diffs)
 					t.Errorf("Different output from %s (red) to the expected value from %s (green):\n%s",
 						b, a, dmp.DiffPrettyText(diffs))
-				} else if expectFail && m == k && !rkati {
+				} else if expectFail && m == k && !testingPort() {
 					t.Errorf("Expected failure, but output is the same")
 				}
 

@@ -29,6 +29,26 @@ $ go test --ckati --ninja --all
 
 The above commands run all cKati and Ninja tests in the `testcases/` directory.
 
+## TypeScript version
+
+The TypeScript port lives in `src-ts/` and runs directly on a recent Node.js
+runtime. Build its `tkati` launcher and run the complete compatibility suite
+with:
+
+```
+$ make tkati
+$ make tkati_test
+```
+
+`tkati` supports direct execution, Ninja generation, regeneration stamps, and
+all-target Ninja generation. The Go harness compares each mode against cKati.
+
+Make text and expanded values are ordinary JavaScript strings. This lets the
+JavaScript engine use its native cons-string/rope representation for repeated
+concatenation instead of maintaining a separate rope type. Symbol and variable
+names still pass through the explicit intern table at the same semantic
+boundaries as the native implementations.
+
 Alternatively, you can also run the tests in a Docker container in a prepared
 test enviroment:
 

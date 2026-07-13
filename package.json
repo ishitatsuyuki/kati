@@ -1,0 +1,12 @@
+{
+  "name": "kati-typescript",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "make tkati_test",
+    "test:unit": "node --test src-ts/*_test.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

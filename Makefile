@@ -48,4 +48,14 @@ rkati_test: rkati ckati
 	go test --rkati
 	go test --rkati --ninja
 
-.PHONY: test clean ckati_tests rkati rkati_test
+tkati:
+	@printf '%s\n' '#!/bin/sh' 'exec node "$$(dirname "$$0")/src-ts/main.ts" "$$@"' > $@
+	@chmod +x $@
+
+tkati_test: tkati ckati
+	node --test src-ts/*_test.ts
+	go test --tkati
+	go test --tkati --ninja
+	go test --tkati --ninja --all
+
+.PHONY: test clean ckati_tests rkati rkati_test tkati_test

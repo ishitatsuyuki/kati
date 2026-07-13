@@ -1,6 +1,7 @@
 kati
 !golang/cmd/kati/
 ckati
+tkati
 para
 *.o
 *.d
