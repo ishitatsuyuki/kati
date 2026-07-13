@@ -4,13 +4,13 @@
  */
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-function runMake(makefile: string): ReturnType<typeof spawnSync> {
+function runMake(makefile: string): SpawnSyncReturns<string> {
   const directory = mkdtempSync(join(tmpdir(), "tkati-test-"));
   writeFileSync(join(directory, "Makefile"), makefile);
   return spawnSync(process.execPath, [resolve("src-ts/main.ts")], {

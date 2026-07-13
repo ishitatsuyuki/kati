@@ -40,6 +40,18 @@ $ make tkati
 $ make tkati_test
 ```
 
+To compile the TypeScript sources to JavaScript instead, install the development
+dependencies and run:
+
+```
+$ npm install
+$ npm run build
+$ npm start -- [kati arguments]
+```
+
+The compiled entry point is `dist/main.js`. The `dist/` directory is generated
+and is not committed.
+
 `tkati` supports direct execution, Ninja generation, regeneration stamps, and
 all-target Ninja generation. The Go harness compares each mode against cKati.
 

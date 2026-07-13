@@ -3,10 +3,17 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
     "test": "make tkati_test",
-    "test:unit": "node --test src-ts/*_test.ts"
+    "test:unit": "node --test src-ts/*_test.ts",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "engines": {
     "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2"
   }
 }
