@@ -53,3 +53,22 @@ test("ordinary names ending in D or F are not automatic-variable suffixes", () =
   evaluator.setVariable("RF", { value: "regular", flavor: "simple", origin: "file" });
   assert.equal(evaluator.expand("$(LD) $(RF)"), "ld regular");
 });
+
+test("variable enumerations include deprecated variables and omit obsolete variables", () => {
+  const evaluator = new Evaluator({});
+  evaluator.setVariable("NORMAL", { value: "normal", flavor: "simple", origin: "file" });
+  evaluator.setVariable("DEPRECATED", {
+    value: "deprecated", flavor: "simple", origin: "file", deprecated: "",
+  });
+  evaluator.setVariable("OBSOLETE", {
+    value: "obsolete", flavor: "simple", origin: "file", obsolete: "",
+  });
+  evaluator.setVariable("MACRO", { value: "$(1)", flavor: "recursive", origin: "file" });
+
+  assert.deepEqual(evaluator.expand("$(.VARIABLES)").split(" "), [
+    ".SHELLSTATUS", "NORMAL", "DEPRECATED", "MACRO",
+  ]);
+  assert.deepEqual(evaluator.expand("$(.KATI_SYMBOLS)").split(" "), [
+    ".SHELLSTATUS", "NORMAL", "DEPRECATED",
+  ]);
+});

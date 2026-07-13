@@ -448,11 +448,17 @@ export class Evaluator {
       throw new Error(`${this.currentFile}:${this.currentLine}: Kati does not support using .SHELLSTATUS inside of a rule`);
     }
     const symbol = intern(name);
-    if (name === ".VARIABLES") return [...this.variables.keys()].join(" ");
+    if (name === ".VARIABLES") {
+      return [...this.variables.entries()]
+        .filter(([, variable]) => variable.obsolete === undefined)
+        .map(([symbol]) => symbol)
+        .join(" ");
+    }
     if (name === ".KATI_SYMBOLS") {
       return [...this.variables.entries()]
-        .filter(([, variable]) => variable.flavor === "simple" ||
-          (!/\$\([0-9]+\)/.test(variable.value) && !/\$\(\$[({]/.test(variable.value)))
+        .filter(([, variable]) => variable.obsolete === undefined &&
+          (variable.flavor === "simple" ||
+            (!/\$\([0-9]+\)/.test(variable.value) && !/\$\(\$[({]/.test(variable.value))))
         .map(([symbol]) => symbol)
         .join(" ");
     }
