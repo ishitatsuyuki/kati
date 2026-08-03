@@ -233,7 +233,7 @@ pub fn dirname(s: &Bytes) -> Bytes {
     if found == 0 {
         return Bytes::new();
     }
-    return s.slice(..found);
+    s.slice(..found)
 }
 
 pub fn basename(s: &[u8]) -> &[u8] {
@@ -255,10 +255,10 @@ pub fn strip_ext(s: &[u8]) -> &[u8] {
     let Some(found) = memrchr(b'.', s) else {
         return s;
     };
-    if let Some(slash_index) = memrchr(b'/', s) {
-        if found < slash_index {
-            return s;
-        }
+    if let Some(slash_index) = memrchr(b'/', s)
+        && found < slash_index
+    {
+        return s;
     }
     &s[0..found]
 }
@@ -267,10 +267,10 @@ pub fn strip_ext_vec(mut s: Vec<u8>) -> Vec<u8> {
     let Some(found) = memrchr(b'.', &s) else {
         return s;
     };
-    if let Some(slash_index) = memrchr(b'/', &s) {
-        if found < slash_index {
-            return s;
-        }
+    if let Some(slash_index) = memrchr(b'/', &s)
+        && found < slash_index
+    {
+        return s;
     }
     s.truncate(found);
     s
@@ -347,10 +347,8 @@ pub fn find_outside_paren(s: &[u8], pattern: &[u8]) -> Option<usize> {
         match c {
             b'(' => paren_stack.push(b')'),
             b'{' => paren_stack.push(b'}'),
-            b')' | b'}' => {
-                if paren_stack.last() == Some(c) {
-                    paren_stack.pop();
-                }
+            b')' | b'}' if paren_stack.last() == Some(c) => {
+                paren_stack.pop();
             }
             _ => {}
         }

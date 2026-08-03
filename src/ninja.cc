@@ -384,7 +384,6 @@ class NinjaGenerator {
       if (needs_subshell)
         *cmd_buf += '(';
 
-      size_t cmd_start = cmd_buf->size();
       std::string_view translated = TranslateCommand(in, cmd_buf);
       if (g_flags.detect_android_echo && !got_descritpion && !c.echo &&
           GetDescriptionFromCommand(translated, description)) {
@@ -471,6 +470,9 @@ class NinjaGenerator {
       }
       if (node->is_restat) {
         out << " restat = 1\n";
+      }
+      if (g_flags.emit_sandbox_disabled) {
+        out << " sandbox_disabled = true\n";
       }
     }
 
